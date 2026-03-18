@@ -49,6 +49,8 @@ if "config.settings" not in sys.modules:
     settings_module.DATA_END_DATE = "2025-03-12"
     sys.modules["config.settings"] = settings_module
 
+import data_collection.collect_news as collect_news_module
+
 from data_collection.collect_news import (
     dedupe_news_records,
     is_within_date_range,
@@ -63,11 +65,46 @@ class CollectNewsHelperTests(unittest.TestCase):
     def test_normalize_date_text_converts_dmy_date(self):
         self.assertEqual(normalize_date_text("05/11/2024"), "2024-11-05")
 
+    def test_normalize_date_text_rejects_blank_and_invalid_text(self):
+        self.assertIsNone(normalize_date_text(""))
+        self.assertIsNone(normalize_date_text("not-a-date"))
+
+    def test_normalize_date_text_accepts_timestamp_input(self):
+        self.assertEqual(normalize_date_text("2024-11-05 14:30:00"), "2024-11-05")
+
     def test_is_within_date_range_accepts_in_range_date(self):
         self.assertTrue(is_within_date_range("2024-11-05"))
 
     def test_is_within_date_range_rejects_out_of_range_date(self):
         self.assertFalse(is_within_date_range("2021-12-31"))
+
+    def test_is_within_date_range_accepts_inclusive_start_boundary(self):
+        self.assertTrue(is_within_date_range(collect_news_module.DATA_START_DATE))
+
+    def test_is_within_date_range_accepts_inclusive_end_boundary(self):
+        self.assertTrue(is_within_date_range(collect_news_module.DATA_END_DATE))
+
+    def test_is_within_date_range_rejects_blank_and_invalid_date_text(self):
+        self.assertFalse(is_within_date_range(""))
+        self.assertFalse(is_within_date_range("not-a-date"))
+
+    def test_is_within_date_range_raises_for_invalid_start_config(self):
+        original_start = collect_news_module.DATA_START_DATE
+        try:
+            collect_news_module.DATA_START_DATE = "bad-date"
+            with self.assertRaises(ValueError):
+                collect_news_module.is_within_date_range("2024-11-05")
+        finally:
+            collect_news_module.DATA_START_DATE = original_start
+
+    def test_is_within_date_range_raises_for_invalid_end_config(self):
+        original_end = collect_news_module.DATA_END_DATE
+        try:
+            collect_news_module.DATA_END_DATE = "bad-date"
+            with self.assertRaises(ValueError):
+                collect_news_module.is_within_date_range("2024-11-05")
+        finally:
+            collect_news_module.DATA_END_DATE = original_end
 
     def test_dedupe_news_records_keeps_latest_record_for_duplicate_url(self):
         records = [
@@ -81,6 +118,26 @@ class CollectNewsHelperTests(unittest.TestCase):
             [
                 {"url": "https://example.com/b", "title": "keep"},
                 {"url": "https://example.com/a", "title": "new"},
+            ],
+        )
+
+    def test_dedupe_news_records_preserves_order_of_last_seen_records(self):
+        records = [
+            {"url": "https://example.com/a", "title": "first a"},
+            {"url": "https://example.com/b", "title": "first b"},
+            {"url": "https://example.com/a", "title": "latest a"},
+            {"url": "https://example.com/c", "title": "only c"},
+            {"url": "https://example.com/b", "title": "latest b"},
+            {"url": "https://example.com/d", "title": "only d"},
+        ]
+
+        self.assertEqual(
+            dedupe_news_records(records),
+            [
+                {"url": "https://example.com/a", "title": "latest a"},
+                {"url": "https://example.com/c", "title": "only c"},
+                {"url": "https://example.com/b", "title": "latest b"},
+                {"url": "https://example.com/d", "title": "only d"},
             ],
         )
 

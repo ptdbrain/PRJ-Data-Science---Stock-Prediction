@@ -53,7 +53,7 @@ def is_within_date_range(date_str: str) -> bool:
     start_date = normalize_date_text(DATA_START_DATE)
     end_date = normalize_date_text(DATA_END_DATE)
     if start_date is None or end_date is None:
-        return False
+        raise ValueError("Invalid DATA_START_DATE or DATA_END_DATE configuration")
 
     return start_date <= normalized_date <= end_date
 
