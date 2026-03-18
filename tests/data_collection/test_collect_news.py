@@ -3,11 +3,6 @@ import types
 import unittest
 
 
-if "bs4" not in sys.modules:
-    bs4_module = types.ModuleType("bs4")
-    bs4_module.BeautifulSoup = object
-    sys.modules["bs4"] = bs4_module
-
 if "requests" not in sys.modules:
     sys.modules["requests"] = types.ModuleType("requests")
 
@@ -138,6 +133,228 @@ class CollectNewsHelperTests(unittest.TestCase):
                 {"url": "https://example.com/c", "title": "only c"},
                 {"url": "https://example.com/b", "title": "latest b"},
                 {"url": "https://example.com/d", "title": "only d"},
+            ],
+        )
+
+
+class CollectNewsParserTests(unittest.TestCase):
+    def test_parse_cafef_search_page_extracts_expected_record(self):
+        html = """
+        <div class="tlitem">
+            <a href="https://cafef.vn/sample-1.chn" title="TCB tang truong manh">TCB tang truong manh</a>
+            <span class="time">05/11/2024</span>
+            <p class="sapo">Techcombank ghi nhan tang truong tin dung.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_cafef_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "TCB tang truong manh",
+                    "content": "Techcombank ghi nhan tang truong tin dung.",
+                    "url": "https://cafef.vn/sample-1.chn",
+                    "source": "cafef",
+                }
+            ],
+        )
+
+    def test_parse_cafef_search_page_cleans_nested_inline_markup(self):
+        html = """
+        <div class="tlitem">
+            <a href="https://cafef.vn/sample-nested.chn"><strong>TCB</strong> tang truong <em>manh</em></a>
+            <span class="time"><span>05/11/2024</span></span>
+            <p class="sapo">Techcombank <strong>ghi nhan</strong> nhu cau <em>tin dung</em> tang.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_cafef_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "TCB tang truong manh",
+                    "content": "Techcombank ghi nhan nhu cau tin dung tang.",
+                    "url": "https://cafef.vn/sample-nested.chn",
+                    "source": "cafef",
+                }
+            ],
+        )
+
+    def test_parse_cafef_search_page_skips_incomplete_items(self):
+        html = """
+        <div class="tlitem">
+            <a title="Missing url">Missing url</a>
+            <span class="time">05/11/2024</span>
+            <p class="sapo">Should be skipped.</p>
+        </div>
+        <div class="tlitem">
+            <a href="https://cafef.vn/missing-date.chn" title="Missing date">Missing date</a>
+            <p class="sapo">Should also be skipped.</p>
+        </div>
+        <div class="tlitem">
+            <a href="https://cafef.vn/valid-item.chn" title="Valid item">Valid item</a>
+            <span class="time">05/11/2024</span>
+            <p class="sapo">This one should remain.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_cafef_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Valid item",
+                    "content": "This one should remain.",
+                    "url": "https://cafef.vn/valid-item.chn",
+                    "source": "cafef",
+                }
+            ],
+        )
+
+    def test_parse_cafef_search_page_handles_multiple_items(self):
+        html = """
+        <div class="tlitem">
+            <a href="https://cafef.vn/item-1.chn" title="Item 1">Item 1</a>
+            <span class="time">05/11/2024</span>
+            <p class="sapo">First summary.</p>
+        </div>
+        <div class="tlitem">
+            <a href="https://cafef.vn/item-2.chn" title="Item 2">Item 2</a>
+            <span class="time">06/11/2024</span>
+            <p class="sapo">Second summary.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_cafef_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Item 1",
+                    "content": "First summary.",
+                    "url": "https://cafef.vn/item-1.chn",
+                    "source": "cafef",
+                },
+                {
+                    "date": "2024-11-06",
+                    "title": "Item 2",
+                    "content": "Second summary.",
+                    "url": "https://cafef.vn/item-2.chn",
+                    "source": "cafef",
+                },
+            ],
+        )
+
+    def test_parse_vnexpress_search_page_extracts_expected_record(self):
+        html = """
+        <article class="item-news">
+            <h3 class="title-news"><a href="https://vnexpress.net/sample-2.html">Techcombank mo rong tin dung</a></h3>
+            <p class="description">Ngan hang ghi nhan nhu cau von cai thien.</p>
+            <span class="date">05/11/2024</span>
+        </article>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_vnexpress_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Techcombank mo rong tin dung",
+                    "content": "Ngan hang ghi nhan nhu cau von cai thien.",
+                    "url": "https://vnexpress.net/sample-2.html",
+                    "source": "vnexpress",
+                }
+            ],
+        )
+
+    def test_parse_vnexpress_search_page_cleans_nested_inline_markup(self):
+        html = """
+        <article class="item-news">
+            <h3 class="title-news">
+                <a href="https://vnexpress.net/sample-nested.html"><span>Techcombank</span> mo rong <em>tin dung</em></a>
+            </h3>
+            <p class="description"><strong>Nhu cau</strong> von <span>cai thien</span>.</p>
+            <span class="date"><time>05/11/2024</time></span>
+        </article>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_vnexpress_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Techcombank mo rong tin dung",
+                    "content": "Nhu cau von cai thien.",
+                    "url": "https://vnexpress.net/sample-nested.html",
+                    "source": "vnexpress",
+                }
+            ],
+        )
+
+    def test_parse_vnexpress_search_page_skips_incomplete_items(self):
+        html = """
+        <article class="item-news">
+            <h3 class="title-news"><a>Missing url</a></h3>
+            <p class="description">Should be skipped.</p>
+            <span class="date">05/11/2024</span>
+        </article>
+        <article class="item-news">
+            <h3 class="title-news"><a href="https://vnexpress.net/missing-date.html">Missing date</a></h3>
+            <p class="description">Should also be skipped.</p>
+        </article>
+        <article class="item-news">
+            <h3 class="title-news"><a href="https://vnexpress.net/valid-item.html">Valid item</a></h3>
+            <p class="description">This one should remain.</p>
+            <span class="date">05/11/2024</span>
+        </article>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_vnexpress_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Valid item",
+                    "content": "This one should remain.",
+                    "url": "https://vnexpress.net/valid-item.html",
+                    "source": "vnexpress",
+                }
+            ],
+        )
+
+    def test_parse_vnexpress_search_page_handles_multiple_items(self):
+        html = """
+        <article class="item-news">
+            <h3 class="title-news"><a href="https://vnexpress.net/item-1.html">Item 1</a></h3>
+            <p class="description">First summary.</p>
+            <span class="date">05/11/2024</span>
+        </article>
+        <article class="item-news">
+            <h3 class="title-news"><a href="https://vnexpress.net/item-2.html">Item 2</a></h3>
+            <p class="description">Second summary.</p>
+            <span class="date">06/11/2024</span>
+        </article>
+        """
+
+        self.assertEqual(
+            collect_news_module.parse_vnexpress_search_page(html),
+            [
+                {
+                    "date": "2024-11-05",
+                    "title": "Item 1",
+                    "content": "First summary.",
+                    "url": "https://vnexpress.net/item-1.html",
+                    "source": "vnexpress",
+                },
+                {
+                    "date": "2024-11-06",
+                    "title": "Item 2",
+                    "content": "Second summary.",
+                    "url": "https://vnexpress.net/item-2.html",
+                    "source": "vnexpress",
+                },
             ],
         )
 
