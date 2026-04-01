@@ -23,6 +23,7 @@ torch>=2.1
 # NLP / Sentiment Analysis
 # ===========================
 transformers>=4.36
+sentencepiece>=0.1.99
 underthesea>=6.8
 
 # ===========================
