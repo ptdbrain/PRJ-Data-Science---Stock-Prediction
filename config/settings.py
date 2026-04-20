@@ -7,7 +7,13 @@ Ví dụ:
     from config.settings import DB_PATH, SYMBOL, DEVICE
 """
 from pathlib import Path
-import torch
+from datetime import date
+
+# Optional: torch for model training (not needed for data pipeline)
+try:
+    import torch
+except ImportError:
+    torch = None
 
 # ============================
 # Paths
@@ -22,8 +28,9 @@ LOG_DIR = PROJECT_DIR / "logs"
 # ============================
 SYMBOL = "TCB"
 DATA_SOURCE = "VCI"
-DATA_START_DATE = "2022-01-01"   # 3 năm gần nhất
-DATA_END_DATE = "2025-03-12"     # Ngày cố định cho Phase 1
+DATA_START_DATE = "2020-01-01"
+# Luôn lấy đến hôm nay để pipeline giá khớp dữ liệu mới nhất (có thể ghi đè bằng biến môi trường nếu cần)
+DATA_END_DATE = date.today().strftime("%Y-%m-%d")
 
 # ============================
 # Database Table Names
@@ -76,10 +83,12 @@ TECHNICAL_FEATURES = [
     'volatility_10d', 'volume_sma_10'
 ]
 
+# Khớp với `process_finance` (features_finance) + các cột ratio có thể có khi merge từ raw_finance
 FINANCE_FEATURES = [
-    'roe', 'roa', 'nim',
+    'roe', 'roa', 'debt_to_equity',
+    'net_profit_margin', 'financial_leverage',
+    'roe_yoy', 'roa_yoy', 'roe_lag4', 'roa_lag4',
     'pe_ratio', 'pb_ratio',
-    'debt_to_equity', 'revenue_growth', 'profit_growth'
 ]
 
 SENTIMENT_FEATURES = ['daily_sentiment', 'news_count']
@@ -94,4 +103,7 @@ SENTIMENT_MODEL = "wonrax/phobert-base-vietnamese-sentiment"
 # ============================
 # Device (GPU/CPU)
 # ============================
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch is not None:
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+else:
+    DEVICE = 'cpu'

@@ -11,7 +11,14 @@ from urllib.parse import urlencode, urljoin
 
 import pandas as pd
 import requests
+from requests.exceptions import HTTPError
 from loguru import logger
+try:
+    from bs4 import BeautifulSoup
+except Exception:
+    BeautifulSoup = None
+import os
+from pathlib import Path
 
 from database.connection import get_connection, write_table
 from config.settings import DATA_END_DATE, DATA_START_DATE, SYMBOL
@@ -347,8 +354,9 @@ def parse_vnexpress_search_page(html: str) -> list[dict]:
 
 
 def build_cafef_search_url(page: int = 1) -> str:
+    # Use the explicit cafef search path for TCB as primary entrypoint
     if page <= 1:
-        return f"{CAFEF_BASE_URL}/tim-kiem.chn?keywords={SYMBOL}"
+        return f"{CAFEF_BASE_URL}/tim-kiem/tcb.chn"
     return f"{CAFEF_BASE_URL}/tim-kiem/trang-{page}.chn?keywords={SYMBOL}"
 
 
@@ -376,6 +384,130 @@ def parse_cafef_total_pages(html: str) -> int:
 def parse_vnexpress_total_pages(html: str) -> int:
     match = re.search(r'max-page="(\d+)"', html)
     return int(match.group(1)) if match else 1
+
+
+def parse_vietstock_search_page(html: str) -> list[dict]:
+    """Parse finance.vietstock.vn TCB news page into normalized news records."""
+    records = []
+    # Prefer BeautifulSoup for robust parsing
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(html, "lxml") if hasattr(BeautifulSoup, '__call__') else BeautifulSoup(html)
+
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            text = a.get_text(strip=True)
+            if not href or not text:
+                continue
+            href_l = href.lower()
+            # heuristics: include links that look like article/news entries
+            if not any(k in href_l for k in ['/tin-tuc', 'tin-tuc-su-kien', 'news', 'article', 'detail']):
+                # also include if title mentions Techcombank/TCB
+                if 'tc b' not in text.lower() and 'techcombank' not in text.lower() and 'tcb' not in text.lower():
+                    continue
+
+            # Build absolute URL
+            url = urljoin('https://finance.vietstock.vn', href)
+
+            # Try to locate a nearby date
+            date_text = None
+            # look for <time> elements near the anchor
+            time_tag = a.find_previous('time') or a.find_next('time')
+            if time_tag and time_tag.get_text(strip=True):
+                date_text = normalize_date_text(time_tag.get_text(strip=True))
+
+            # fallback: search ancestor spans/small elements for date-like text
+            if not date_text:
+                for p in a.parents:
+                    if p is None:
+                        break
+                    span = p.find(lambda tag: tag.name in ('span', 'small') and tag.get_text(strip=True))
+                    if span:
+                        candidate = normalize_date_text(span.get_text(strip=True))
+                        if candidate:
+                            date_text = candidate
+                            break
+
+            rec = _build_news_record(date_text=date_text or '', title=text, content='', url=url, source='vietstock')
+            if rec is not None:
+                records.append(rec)
+
+        return dedupe_news_records(records)
+
+    # Fallback to simple HTML fragment parser if BeautifulSoup not available
+    root = _parse_html_fragment(html)
+    for a in _find_all(root, tag='a'):
+        href = _node_attr(a, 'href')
+        title = _node_text(a)
+        if not href or not title:
+            continue
+        if not any(k in href.lower() for k in ['/tin-tuc', 'news', 'article']):
+            if 'techcombank' not in title.lower() and 'tcb' not in title.lower():
+                continue
+        url = urljoin('https://finance.vietstock.vn', href)
+        rec = _build_news_record(date_text='', title=title, content='', url=url, source='vietstock')
+        if rec is not None:
+            records.append(rec)
+
+    return dedupe_news_records(records)
+
+
+def parse_fireant_search_page(html: str) -> list[dict]:
+    """Parse Fireant dashboard page for external news links related to TCB."""
+    records = []
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(html, "lxml") if hasattr(BeautifulSoup, '__call__') else BeautifulSoup(html)
+        # Fireant often embeds external news links; collect anchors that contain known news hostnames or look like article links
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            title = a.get_text(strip=True)
+            if not href or not title:
+                continue
+            href_l = href.lower()
+            if not any(k in href_l for k in ('vnexpress.net', 'cafef.vn', 'zingnews.vn', 'vnmedia.vn', 'thesaigontimes.vn', '/news', 'article', 'tin-tuc')):
+                # include anchors mentioning Techcombank
+                if 'techcombank' not in title.lower() and 'tcb' not in title.lower():
+                    continue
+
+            url = urljoin('https://fireant.vn', href)
+
+            # attempt to find a date near the anchor
+            date_text = None
+            time_tag = a.find_previous('time') or a.find_next('time')
+            if time_tag and time_tag.get_text(strip=True):
+                date_text = normalize_date_text(time_tag.get_text(strip=True))
+
+            if not date_text:
+                for p in a.parents:
+                    if p is None:
+                        break
+                    span = p.find(lambda tag: tag.name in ('span', 'small') and tag.get_text(strip=True))
+                    if span:
+                        candidate = normalize_date_text(span.get_text(strip=True))
+                        if candidate:
+                            date_text = candidate
+                            break
+
+            rec = _build_news_record(date_text=date_text or '', title=title, content='', url=url, source='fireant')
+            if rec is not None:
+                records.append(rec)
+
+        return dedupe_news_records(records)
+
+    # Fallback
+    root = _parse_html_fragment(html)
+    for a in _find_all(root, tag='a'):
+        href = _node_attr(a, 'href')
+        title = _node_text(a)
+        if not href or not title:
+            continue
+        if 'techcombank' not in title.lower() and 'tcb' not in title.lower():
+            continue
+        url = urljoin('https://fireant.vn', href)
+        rec = _build_news_record(date_text='', title=title, content='', url=url, source='fireant')
+        if rec is not None:
+            records.append(rec)
+
+    return dedupe_news_records(records)
 
 
 def fetch_search_page(session, url: str) -> str:
@@ -406,7 +538,28 @@ def collect_cafef_news(
 
         url = build_cafef_search_url(page)
         logger.info(f"Fetching CafeF page {page}: {url}")
-        html = fetch_search_page(session, url)
+        try:
+            html = fetch_search_page(session, url)
+        except HTTPError as he:
+            # Try fallback query-based search URL if primary path not found
+            status_code = None
+            try:
+                status_code = he.response.status_code  # type: ignore[attr-defined]
+            except Exception:
+                status_code = None
+
+            if status_code == 404 and page == 1:
+                fallback = f"{CAFEF_BASE_URL}/tim-kiem.chn?keywords={SYMBOL}"
+                logger.info(f"Primary CafeF URL returned 404, retrying fallback: {fallback}")
+                try:
+                    html = fetch_search_page(session, fallback)
+                except Exception as e:
+                    logger.error(f"Fallback CafeF fetch failed: {e}")
+                    break
+            else:
+                logger.error(f"Failed fetching CafeF URL: {he}")
+                break
+
         if total_pages is None:
             total_pages = parse_cafef_total_pages(html)
 
@@ -422,6 +575,44 @@ def collect_cafef_news(
             time.sleep(request_delay_seconds)
         page += 1
 
+    return dedupe_news_records(records)
+
+
+def collect_vietstock_news(
+    session,
+    *,
+    max_pages: int | None = None,
+    request_delay_seconds: float = REQUEST_DELAY_SECONDS,
+) -> list[dict]:
+    """Collect news from finance.vietstock.vn TCB news page."""
+    url = "https://finance.vietstock.vn/TCB/tin-tuc-su-kien.htm"
+    logger.info(f"Fetching Vietstock news: {url}")
+    try:
+        html = fetch_search_page(session, url)
+    except Exception as e:
+        logger.error(f"Failed fetching vietstock: {e}")
+        return []
+
+    records = parse_vietstock_search_page(html)
+    return dedupe_news_records(records)
+
+
+def collect_fireant_news(
+    session,
+    *,
+    max_pages: int | None = None,
+    request_delay_seconds: float = REQUEST_DELAY_SECONDS,
+) -> list[dict]:
+    """Collect news from Fireant dashboard for TCB."""
+    url = "https://fireant.vn/dashboard/symbol/TCB"
+    logger.info(f"Fetching Fireant dashboard: {url}")
+    try:
+        html = fetch_search_page(session, url)
+    except Exception as e:
+        logger.error(f"Failed fetching fireant: {e}")
+        return []
+
+    records = parse_fireant_search_page(html)
     return dedupe_news_records(records)
 
 
@@ -510,9 +701,10 @@ def collect_news(
     *,
     max_pages_per_source: int | None = None,
     request_delay_seconds: float = REQUEST_DELAY_SECONDS,
+    export_path: str | None = None,
 ) -> int:
     """
-    Scrape news about TCB/Techcombank from CafeF and VnExpress.
+    Scrape news about TCB/Techcombank from Vietstock, CafeF and Fireant.
     Save into raw_news table.
 
     Columns: date, title, content, url, source
@@ -528,8 +720,9 @@ def collect_news(
     try:
         source_records = []
         for source_name, collector in (
+            ("vietstock", collect_vietstock_news),
             ("cafef", collect_cafef_news),
-            ("vnexpress", collect_vnexpress_news),
+            ("fireant", collect_fireant_news),
         ):
             try:
                 records = collector(
@@ -542,9 +735,34 @@ def collect_news(
             except REQUEST_EXCEPTION as exc:
                 logger.error(f"Failed to collect {source_name}: {exc}")
 
+        # Export fetched records (all sources) for debugging/inspection
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fetched_path = Path("data_collection") / f"fetched_news_{ts}.csv"
+            fetched_path.parent.mkdir(parents=True, exist_ok=True)
+            df_fetched = pd.DataFrame(source_records, columns=NEWS_COLUMNS)
+            df_fetched.to_csv(fetched_path, index=False, encoding="utf-8-sig")
+            logger.info(f"Exported fetched news to {fetched_path}")
+        except Exception as e:
+            logger.error(f"Failed to export fetched news: {e}")
+
         existing_urls = get_existing_news_urls()
         new_records = _prepare_new_records(source_records, existing_urls)
         saved_count = save_news_records(new_records)
+
+        # Export collected new records to CSV for inspection (optional)
+        try:
+            if new_records:
+                df_export = pd.DataFrame(new_records, columns=NEWS_COLUMNS)
+                ts2 = datetime.now().strftime("%Y%m%d_%H%M%S")
+                default_path = Path("data_collection") / f"collected_news_{ts2}.csv"
+                out_path = Path(export_path) if export_path else default_path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                # Use utf-8-sig for Excel-friendly encoding
+                df_export.to_csv(out_path, index=False, encoding="utf-8-sig")
+                logger.info(f"Exported collected news to {out_path}")
+        except Exception as e:
+            logger.error(f"Failed to export collected news: {e}")
 
         logger.info(
             f"Finished collecting news: fetched={len(source_records)}, "

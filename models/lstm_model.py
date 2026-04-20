@@ -17,33 +17,28 @@ class LSTMPredictor(BasePredictor):
 
     def build_model(self, input_size: int) -> nn.Module:
         """Trả về LSTM model."""
+        class LSTMNet(nn.Module):
+            def __init__(self, input_size: int):
+                super().__init__()
+                self.lstm = nn.LSTM(
+                    input_size=input_size,
+                    hidden_size=HIDDEN_SIZE,
+                    num_layers=NUM_LAYERS,
+                    batch_first=True,
+                    dropout=DROPOUT if NUM_LAYERS > 1 else 0.0,
+                )
+                self.fc = nn.Sequential(
+                    nn.Linear(HIDDEN_SIZE, 64),
+                    nn.ReLU(),
+                    nn.Dropout(DROPOUT),
+                    nn.Linear(64, 1)
+                )
 
-        # TODO: Thành viên D implement
-        # Gợi ý kiến trúc:
-        #
-        # class LSTMNet(nn.Module):
-        #     def __init__(self):
-        #         super().__init__()
-        #         self.lstm = nn.LSTM(
-        #             input_size=input_size,
-        #             hidden_size=HIDDEN_SIZE,
-        #             num_layers=NUM_LAYERS,
-        #             batch_first=True,
-        #             dropout=DROPOUT
-        #         )
-        #         self.fc = nn.Sequential(
-        #             nn.Linear(HIDDEN_SIZE, 64),
-        #             nn.ReLU(),
-        #             nn.Dropout(DROPOUT),
-        #             nn.Linear(64, 1)
-        #         )
-        #
-        #     def forward(self, x):
-        #         lstm_out, _ = self.lstm(x)
-        #         last_hidden = lstm_out[:, -1, :]  # Lấy output timestep cuối
-        #         return self.fc(last_hidden).squeeze(-1)
-        #
-        # Nâng cao: thêm Attention mechanism
-        # (xem reference: models/base_model.py phần comment)
+            def forward(self, x):
+                # x: (batch, seq_len, input_size)
+                lstm_out, _ = self.lstm(x)  # (batch, seq_len, hidden_size)
+                last_hidden = lstm_out[:, -1, :]  # take last timestep
+                out = self.fc(last_hidden)  # (batch, 1)
+                return out.squeeze(-1)
 
-        raise NotImplementedError("Thành viên D cần implement")
+        return LSTMNet(input_size)
