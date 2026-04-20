@@ -72,16 +72,30 @@ class BasePredictor(ABC):
         logger.info(f"[{self.model_name}] Training | "
                      f"{len(feature_cols)} features | {len(df)} rows | Device: {DEVICE}")
 
-        # --- Scale ---
+        # --- Split RAW trước (THEO THỜI GIAN, không random) ---
+        # Phải split trước, fit scaler sau để tránh data leakage
         features = df[feature_cols].values
         target = df[target_col].values
-        features_scaled = self.feature_scaler.fit_transform(features)
-        target_scaled = self.target_scaler.fit_transform(target.reshape(-1, 1)).flatten()
+
+        n_raw = len(features)
+        train_end_raw = int(n_raw * TRAIN_RATIO)
+        val_end_raw = int(n_raw * (TRAIN_RATIO + VAL_RATIO))
+
+        features_train_raw = features[:train_end_raw]
+        target_train_raw  = target[:train_end_raw]
+
+        # --- Scale: fit CHỈ trên train set → transform toàn bộ ---
+        self.feature_scaler.fit(features_train_raw)
+        self.target_scaler.fit(target_train_raw.reshape(-1, 1))
+
+        features_scaled = self.feature_scaler.transform(features)
+        target_scaled = self.target_scaler.transform(target.reshape(-1, 1)).flatten()
 
         # --- Sequences ---
         X, y = self.create_sequences(features_scaled, target_scaled)
 
-        # --- Split (THEO THỜI GIAN, không random) ---
+        # Tính lại split boundary sau khi tạo sequences
+        # (create_sequences giảm n đi LOOKBACK_DAYS)
         n = len(X)
         train_end = int(n * TRAIN_RATIO)
         val_end = int(n * (TRAIN_RATIO + VAL_RATIO))
@@ -194,14 +208,19 @@ class BasePredictor(ABC):
 
         rmse = np.sqrt(np.mean((preds - targets) ** 2))
         mae = np.mean(np.abs(preds - targets))
-        mape = np.mean(np.abs((targets - preds) / targets)) * 100
+        # Tránh chia cho 0 khi targets = 0 (giá cổ phiếu không bao giờ = 0, nhưng an toàn)
+        mape = np.mean(np.abs((targets - preds) / np.where(targets == 0, 1, targets))) * 100
 
-        # Directional accuracy: predict đúng hướng tăng/giảm
-        dir_correct = np.sum(
-            np.sign(preds[1:] - preds[:-1]) ==
-            np.sign(targets[1:] - targets[:-1])
-        )
-        dir_acc = dir_correct / max(len(preds) - 1, 1) * 100
+        # Directional accuracy: model dự đoán đúng hướng tăng/giảm so với ngày trước không?
+        # Ý nghĩa thực tế: ngày hôm nay, predicted[i] > actual[i-1] → model nói "tăng"
+        # So sánh với: actual[i] > actual[i-1] → thực tế có tăng không?
+        if len(preds) > 1:
+            pred_direction  = np.sign(preds[1:]  - targets[:-1])   # dự đoán: so với giá thực hôm qua
+            actual_direction = np.sign(targets[1:] - targets[:-1])  # thực tế: so với giá thực hôm qua
+            dir_correct = np.sum(pred_direction == actual_direction)
+            dir_acc = dir_correct / (len(preds) - 1) * 100
+        else:
+            dir_acc = 0.0
 
         return {
             'model_name': self.model_name,

@@ -83,12 +83,13 @@ TECHNICAL_FEATURES = [
     'volatility_10d', 'volume_sma_10'
 ]
 
-# Khớp với `process_finance` (features_finance) + các cột ratio có thể có khi merge từ raw_finance
+# Khớp với `process_finance` (features_finance) sau bước feature engineering
 FINANCE_FEATURES = [
     'roe', 'roa', 'debt_to_equity',
     'net_profit_margin', 'financial_leverage',
     'roe_yoy', 'roa_yoy', 'roe_lag4', 'roa_lag4',
-    'pe_ratio', 'pb_ratio',
+    # NOTE: pe_ratio, pb_ratio chỉ có trong raw_finance,
+    # không có trong features_finance → đã xóa để tránh confusion
 ]
 
 SENTIMENT_FEATURES = ['daily_sentiment', 'news_count']

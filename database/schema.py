@@ -62,39 +62,136 @@ FEATURES_FINANCE_TABLE_SQL = """
 
 
 def create_all_tables():
-    """Tạo toàn bộ tables cho pipeline xử lý dữ liệu."""
+    """Tạo toàn bộ tables cho pipeline."""
     conn = get_connection()
 
     # =============================================
-    # STAGE 1: RAW DATA - Dữ liệu gốc từ vnstock
+    # STAGE 0: RAW DATA GIÁ CỔ PHIếu
     # =============================================
-    
-    conn.execute(RAW_FINANCE_TABLE_SQL)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS raw_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL NOT NULL,
+            volume REAL,
+            symbol TEXT DEFAULT 'TCB',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(date)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS clean_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume REAL,
+            sma_10 REAL, sma_20 REAL, sma_50 REAL,
+            ema_12 REAL, ema_26 REAL,
+            rsi_14 REAL,
+            macd REAL, macd_signal REAL, macd_hist REAL,
+            bb_upper REAL, bb_middle REAL, bb_lower REAL,
+            atr_14 REAL, obv REAL,
+            price_change REAL, price_change_5d REAL,
+            volatility_10d REAL, volume_sma_10 REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(date)
+        )
+    """)
 
     # =============================================
-    # STAGE 2+3: FEATURES - Sau clean & engineer
+    # STAGE 0: RAW NEWS
     # =============================================
-    
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS raw_news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            url TEXT,
+            source TEXT,
+            symbol TEXT DEFAULT 'TCB',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS clean_news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            url TEXT,
+            source TEXT,
+            sentiment_neg REAL,
+            sentiment_pos REAL,
+            sentiment_neu REAL,
+            sentiment_score REAL,
+            sentiment_label TEXT,
+            embedding_score REAL,
+            embedding_label TEXT,
+            daily_sentiment REAL,
+            news_count INTEGER,
+            embedding TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # =============================================
+    # STAGE 1: RAW FINANCE (và features_finance) — Từ vnstock Ratio API
+    # =============================================
+
+    conn.execute(RAW_FINANCE_TABLE_SQL)
     conn.execute(FEATURES_FINANCE_TABLE_SQL)
 
     # =============================================
-    # STAGE 4: SPLIT DATA - Train/Val/Test splits
+    # STAGE 2: MERGED FEATURES — Input cho model
     # =============================================
-    
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS merged_features (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            open REAL, high REAL, low REAL, close REAL, volume REAL,
+            sma_10 REAL, sma_20 REAL, sma_50 REAL,
+            ema_12 REAL, ema_26 REAL,
+            rsi_14 REAL,
+            macd REAL, macd_signal REAL, macd_hist REAL,
+            bb_upper REAL, bb_middle REAL, bb_lower REAL,
+            atr_14 REAL, obv REAL,
+            price_change REAL, price_change_5d REAL,
+            volatility_10d REAL, volume_sma_10 REAL,
+            roe REAL, roa REAL, debt_to_equity REAL,
+            net_profit_margin REAL, financial_leverage REAL,
+            roe_yoy REAL, roa_yoy REAL, roe_lag4 REAL, roa_lag4 REAL,
+            daily_sentiment REAL,
+            news_count INTEGER,
+            target REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(date)
+        )
+    """)
+
+    # =============================================
+    # SPLIT DATA — Train/Val/Test splits (finance)
+    # =============================================
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS train_features (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
             date TEXT NOT NULL,
-            roe REAL,
-            roa REAL,
-            debt_to_equity REAL,
-            net_profit_margin REAL,
-            financial_leverage REAL,
-            roe_yoy REAL,
-            roa_yoy REAL,
-            roe_lag4 REAL,
-            roa_lag4 REAL,
+            roe REAL, roa REAL, debt_to_equity REAL,
+            net_profit_margin REAL, financial_leverage REAL,
+            roe_yoy REAL, roa_yoy REAL, roe_lag4 REAL, roa_lag4 REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -104,15 +201,9 @@ def create_all_tables():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
             date TEXT NOT NULL,
-            roe REAL,
-            roa REAL,
-            debt_to_equity REAL,
-            net_profit_margin REAL,
-            financial_leverage REAL,
-            roe_yoy REAL,
-            roa_yoy REAL,
-            roe_lag4 REAL,
-            roa_lag4 REAL,
+            roe REAL, roa REAL, debt_to_equity REAL,
+            net_profit_margin REAL, financial_leverage REAL,
+            roe_yoy REAL, roa_yoy REAL, roe_lag4 REAL, roa_lag4 REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -122,20 +213,13 @@ def create_all_tables():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
             date TEXT NOT NULL,
-            roe REAL,
-            roa REAL,
-            debt_to_equity REAL,
-            net_profit_margin REAL,
-            financial_leverage REAL,
-            roe_yoy REAL,
-            roa_yoy REAL,
-            roe_lag4 REAL,
-            roa_lag4 REAL,
+            roe REAL, roa REAL, debt_to_equity REAL,
+            net_profit_margin REAL, financial_leverage REAL,
+            roe_yoy REAL, roa_yoy REAL, roe_lag4 REAL, roa_lag4 REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Trọng số huấn luyện (weight cho mỗi mẫu)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS train_weights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,9 +231,9 @@ def create_all_tables():
     """)
 
     # =============================================
-    # MODEL OUTPUTS - Dự đoán và metrics
+    # MODEL OUTPUTS — Dự đoán và metrics
     # =============================================
-    
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,7 +241,9 @@ def create_all_tables():
             model_name TEXT,
             predicted_price REAL,
             actual_price REAL,
+            error_pct REAL,
             predicted_at DATETIME,
+            updated_at DATETIME,
             UNIQUE(date, model_name)
         )
     """)
@@ -166,13 +252,9 @@ def create_all_tables():
         CREATE TABLE IF NOT EXISTS model_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model_name TEXT UNIQUE NOT NULL,
-            rmse REAL,
-            mae REAL,
-            mape REAL,
+            rmse REAL, mae REAL, mape REAL,
             directional_accuracy REAL,
-            train_loss REAL,
-            val_loss REAL,
-            test_loss REAL,
+            train_loss REAL, val_loss REAL, test_loss REAL,
             epochs_trained INTEGER,
             trained_at DATETIME,
             is_best INTEGER DEFAULT 0
@@ -212,18 +294,22 @@ def show_tables():
     ).fetchall()
 
     print(f"\n📊 Database: {len(tables)} tables")
-    print("=" * 50)
-    
-    # Group tables by stage
+    print("=" * 55)
+
     stages = {
-        "STAGE 1 (Raw Data)": ["raw_finance"],
-        "STAGE 2+3 (Features)": ["features_finance"],
-        "STAGE 4 (Split Data)": ["train_features", "val_features", "test_features", "train_weights"],
-        "Model Outputs": ["predictions", "model_metrics"]
+        "Giá cổ phiếu (Raw)": ["raw_prices"],
+        "Giá cổ phiếu (Clean)": ["clean_prices"],
+        "Tin tức (Raw)": ["raw_news"],
+        "Tin tức (Clean + Sentiment)": ["clean_news"],
+        "Tài chính (Raw)": ["raw_finance"],
+        "Tài chính (Features)": ["features_finance"],
+        "Merged (Input Model)": ["merged_features"],
+        "Split Data (Finance)": ["train_features", "val_features", "test_features", "train_weights"],
+        "Model Outputs": ["predictions", "model_metrics"],
     }
-    
+
     existing_tables = {name[0] for name in tables}
-    
+
     for stage, table_list in stages.items():
         stage_tables = [t for t in table_list if t in existing_tables]
         if stage_tables:
@@ -231,12 +317,12 @@ def show_tables():
             for name in stage_tables:
                 count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
                 status = "✅" if count > 0 else "⬜"
-                print(f"  {status} {name:<25} {count:>6} rows")
-    
-    print("\n" + "=" * 50)
+                print(f"  {status} {name:<30} {count:>6} rows")
+
+    print("\n" + "=" * 55)
     conn.close()
 
 
 if __name__ == "__main__":
     create_all_tables()
-    show_tables()
+    show_tables()

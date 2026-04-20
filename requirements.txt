@@ -26,6 +26,7 @@ torch>=2.1
 transformers>=4.36
 sentencepiece>=0.1.99
 underthesea>=6.8
+sentence-transformers>=2.7
 
 # ===========================
 # Web Dashboard
