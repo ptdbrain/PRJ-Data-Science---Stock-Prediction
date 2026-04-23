@@ -1,140 +1,200 @@
 """
 Base class cho tất cả prediction models.
-══════════════════════════════════════
-Mỗi model (LSTM, GRU, Transformer) kế thừa class này.
-Đảm bảo mọi model có cùng interface → dễ so sánh.
-
-Phụ trách: Thành viên D (viết base), E (review)
 """
-import torch
-import torch.nn as nn
-import numpy as np
-import pandas as pd
 from abc import ABC, abstractmethod
-from sklearn.preprocessing import MinMaxScaler
-from torch.utils.data import DataLoader, TensorDataset
-from loguru import logger
 from datetime import datetime
 
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from utils.logger import logger
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, TensorDataset
+
 from config.settings import (
-    DEVICE, LOOKBACK_DAYS, EPOCHS, BATCH_SIZE,
-    LEARNING_RATE, TRAIN_RATIO, VAL_RATIO, MODEL_DIR
+    BATCH_SIZE,
+    DEVICE,
+    EPOCHS,
+    LEARNING_RATE,
+    LOOKBACK_DAYS,
+    MODEL_DIR,
+    TRAIN_RATIO,
+    VAL_RATIO,
 )
 
 
 class BasePredictor(ABC):
-    """
-    Base class — mọi model phải kế thừa.
+    """Base predictor shared by LSTM/GRU/Transformer models."""
 
-    Cách dùng:
-        model = LSTMPredictor()
-        metrics = model.fit(df, feature_cols)    # Train
-        price = model.predict_next(df)           # Predict ngày mai
-        model.save()                             # Lưu
-        model.load()                             # Load
-    """
-
-    def __init__(self, model_name: str):
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        lookback_days: int = LOOKBACK_DAYS,
+        epochs: int = EPOCHS,
+        batch_size: int = BATCH_SIZE,
+        learning_rate: float = LEARNING_RATE,
+        train_ratio: float = TRAIN_RATIO,
+        val_ratio: float = VAL_RATIO,
+        device=DEVICE,
+    ):
         self.model_name = model_name
-        self.model: nn.Module = None
+        self.lookback_days = lookback_days
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.train_ratio = train_ratio
+        self.val_ratio = val_ratio
+        self.device = device
+
+        self.model: nn.Module | None = None
         self.feature_scaler = MinMaxScaler()
         self.target_scaler = MinMaxScaler()
-        self.feature_cols = []
-        self.history = {'train_loss': [], 'val_loss': []}
+        self.feature_cols: list[str] = []
+        self.history = {"train_loss": [], "val_loss": []}
+        self.split_metadata: dict[str, object] = {}
 
     @abstractmethod
     def build_model(self, input_size: int) -> nn.Module:
-        """Subclass PHẢI implement: trả về nn.Module."""
-        pass
+        """Subclass must return a ready-to-train torch module."""
 
-    def create_sequences(self, features, target, lookback=LOOKBACK_DAYS):
-        """Tạo sliding window sequences cho time series."""
-        X, y = [], []
-        for i in range(lookback, len(features)):
-            X.append(features[i - lookback:i])
-            y.append(target[i])
-        return np.array(X), np.array(y)
+    def _create_sequences(self, features_scaled, target_scaled, dates):
+        sequences = []
+        labels = []
+        target_indices = []
+        target_dates = []
 
-    def fit(self, df: pd.DataFrame, feature_cols: list,
-            target_col: str = 'target') -> dict:
-        """
-        Train model.
+        for target_index in range(self.lookback_days, len(features_scaled)):
+            sequences.append(features_scaled[target_index - self.lookback_days:target_index])
+            labels.append(target_scaled[target_index])
+            target_indices.append(target_index)
+            target_dates.append(dates.iloc[target_index] if dates is not None else None)
 
-        Args:
-            df: DataFrame chứa features + target
-            feature_cols: list tên cột features
-            target_col: tên cột target (giá ngày hôm sau)
+        return sequences, labels, target_indices, target_dates
 
-        Returns:
-            dict metrics: rmse, mae, mape, directional_accuracy, ...
-        """
-        self.feature_cols = feature_cols
-        logger.info(f"[{self.model_name}] Training | "
-                     f"{len(feature_cols)} features | {len(df)} rows | Device: {DEVICE}")
+    def _prepare_time_series_data(self, df: pd.DataFrame, feature_cols: list, target_col: str = "target") -> dict:
+        if "date" in df.columns:
+            df = df.sort_values("date").reset_index(drop=True)
 
-        # --- Split RAW trước (THEO THỜI GIAN, không random) ---
-        # Phải split trước, fit scaler sau để tránh data leakage
         features = df[feature_cols].values
         target = df[target_col].values
+        dates = pd.to_datetime(df["date"]) if "date" in df.columns else None
 
-        n_raw = len(features)
-        train_end_raw = int(n_raw * TRAIN_RATIO)
-        val_end_raw = int(n_raw * (TRAIN_RATIO + VAL_RATIO))
+        raw_count = len(df)
+        train_end_raw = int(raw_count * self.train_ratio)
+        val_end_raw = int(raw_count * (self.train_ratio + self.val_ratio))
 
-        features_train_raw = features[:train_end_raw]
-        target_train_raw  = target[:train_end_raw]
+        if train_end_raw <= self.lookback_days:
+            raise ValueError(
+                f"Train split too small for lookback={self.lookback_days}. "
+                f"Need more than {self.lookback_days} rows in train split."
+            )
+        if val_end_raw <= train_end_raw or val_end_raw >= raw_count:
+            raise ValueError("Invalid train/val ratios for current dataset size.")
 
-        # --- Scale: fit CHỈ trên train set → transform toàn bộ ---
-        self.feature_scaler.fit(features_train_raw)
-        self.target_scaler.fit(target_train_raw.reshape(-1, 1))
+        self.feature_scaler.fit(features[:train_end_raw])
+        self.target_scaler.fit(target[:train_end_raw].reshape(-1, 1))
 
         features_scaled = self.feature_scaler.transform(features)
         target_scaled = self.target_scaler.transform(target.reshape(-1, 1)).flatten()
 
-        # --- Sequences ---
-        X, y = self.create_sequences(features_scaled, target_scaled)
-
-        # Tính lại split boundary sau khi tạo sequences
-        # (create_sequences giảm n đi LOOKBACK_DAYS)
-        n = len(X)
-        train_end = int(n * TRAIN_RATIO)
-        val_end = int(n * (TRAIN_RATIO + VAL_RATIO))
-
-        X_train, y_train = X[:train_end], y[:train_end]
-        X_val, y_val = X[train_end:val_end], y[train_end:val_end]
-        X_test, y_test = X[val_end:], y[val_end:]
-
-        logger.info(f"  Split: train={len(X_train)} | val={len(X_val)} | test={len(X_test)}")
-
-        # --- Build model ---
-        self.model = self.build_model(input_size=len(feature_cols)).to(DEVICE)
-
-        # --- Training loop ---
-        criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=LEARNING_RATE)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, patience=10, factor=0.5
+        sequences, labels, target_indices, target_dates = self._create_sequences(
+            features_scaled,
+            target_scaled,
+            dates,
         )
+
+        partitions = {
+            "train": {"X": [], "y": [], "target_indices": [], "target_dates": []},
+            "val": {"X": [], "y": [], "target_indices": [], "target_dates": []},
+            "test": {"X": [], "y": [], "target_indices": [], "target_dates": []},
+        }
+
+        for sequence, label, target_index, target_date in zip(sequences, labels, target_indices, target_dates):
+            if target_index < train_end_raw:
+                partition = "train"
+            elif target_index < val_end_raw:
+                partition = "val"
+            else:
+                partition = "test"
+
+            partitions[partition]["X"].append(sequence)
+            partitions[partition]["y"].append(label)
+            partitions[partition]["target_indices"].append(target_index)
+            partitions[partition]["target_dates"].append(target_date)
+
+        for partition in partitions.values():
+            partition["X"] = np.asarray(partition["X"], dtype=np.float32)
+            partition["y"] = np.asarray(partition["y"], dtype=np.float32)
+            partition["target_dates"] = [
+                value.strftime("%Y-%m-%d") if hasattr(value, "strftime") else value
+                for value in partition["target_dates"]
+            ]
+
+        train_end_date = dates.iloc[train_end_raw - 1].strftime("%Y-%m-%d") if dates is not None else None
+        val_end_date = dates.iloc[val_end_raw - 1].strftime("%Y-%m-%d") if dates is not None else None
+
+        return {
+            "train": partitions["train"],
+            "val": partitions["val"],
+            "test": partitions["test"],
+            "train_target_indices": partitions["train"]["target_indices"],
+            "val_target_indices": partitions["val"]["target_indices"],
+            "test_target_indices": partitions["test"]["target_indices"],
+            "train_end_date": train_end_date,
+            "val_end_date": val_end_date,
+            "lookback_days": self.lookback_days,
+            "train_end_raw": train_end_raw,
+            "val_end_raw": val_end_raw,
+            "row_count": raw_count,
+        }
+
+    def fit(self, df: pd.DataFrame, feature_cols: list, target_col: str = "target") -> dict:
+        self.feature_cols = feature_cols
+        logger.info(
+            f"[{self.model_name}] Training | "
+            f"{len(feature_cols)} features | {len(df)} rows | Device: {self.device}"
+        )
+
+        split_data = self._prepare_time_series_data(df, feature_cols, target_col=target_col)
+        train_split = split_data["train"]
+        val_split = split_data["val"]
+        test_split = split_data["test"]
+
+        if len(train_split["X"]) == 0 or len(val_split["X"]) == 0 or len(test_split["X"]) == 0:
+            raise ValueError("Train/val/test partitions must all contain at least one sequence.")
+
+        logger.info(
+            "  Split by target index: "
+            f"train={len(train_split['X'])} | val={len(val_split['X'])} | test={len(test_split['X'])}"
+        )
+
+        self.model = self.build_model(input_size=len(feature_cols)).to(self.device)
+
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
 
         train_loader = DataLoader(
-            TensorDataset(torch.FloatTensor(X_train), torch.FloatTensor(y_train)),
-            batch_size=BATCH_SIZE, shuffle=True
+            TensorDataset(torch.FloatTensor(train_split["X"]), torch.FloatTensor(train_split["y"])),
+            batch_size=self.batch_size,
+            shuffle=True,
         )
         val_loader = DataLoader(
-            TensorDataset(torch.FloatTensor(X_val), torch.FloatTensor(y_val)),
-            batch_size=BATCH_SIZE
+            TensorDataset(torch.FloatTensor(val_split["X"]), torch.FloatTensor(val_split["y"])),
+            batch_size=self.batch_size,
         )
 
-        best_val_loss = float('inf')
+        best_val_loss = float("inf")
         patience_counter = 0
         max_patience = 20
 
-        for epoch in range(EPOCHS):
-            # Train
+        for epoch in range(self.epochs):
             self.model.train()
             train_losses = []
             for xb, yb in train_loader:
-                xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+                xb, yb = xb.to(self.device), yb.to(self.device)
                 optimizer.zero_grad()
                 loss = criterion(self.model(xb), yb)
                 loss.backward()
@@ -142,25 +202,25 @@ class BasePredictor(ABC):
                 optimizer.step()
                 train_losses.append(loss.item())
 
-            # Validate
             self.model.eval()
             val_losses = []
             with torch.no_grad():
                 for xb, yb in val_loader:
-                    xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+                    xb, yb = xb.to(self.device), yb.to(self.device)
                     val_losses.append(criterion(self.model(xb), yb).item())
 
-            avg_train = np.mean(train_losses)
-            avg_val = np.mean(val_losses)
-            self.history['train_loss'].append(avg_train)
-            self.history['val_loss'].append(avg_val)
+            avg_train = float(np.mean(train_losses))
+            avg_val = float(np.mean(val_losses))
+            self.history["train_loss"].append(avg_train)
+            self.history["val_loss"].append(avg_val)
             scheduler.step(avg_val)
 
-            if (epoch + 1) % 10 == 0:
-                logger.info(f"  Epoch {epoch+1}/{EPOCHS} | "
-                             f"Train: {avg_train:.6f} | Val: {avg_val:.6f}")
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                logger.info(
+                    f"  Epoch {epoch + 1}/{self.epochs} | "
+                    f"Train: {avg_train:.6f} | Val: {avg_val:.6f}"
+                )
 
-            # Early stopping + save best
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
                 patience_counter = 0
@@ -168,135 +228,156 @@ class BasePredictor(ABC):
             else:
                 patience_counter += 1
                 if patience_counter >= max_patience:
-                    logger.info(f"  Early stopping at epoch {epoch+1}")
+                    logger.info(f"  Early stopping at epoch {epoch + 1}")
                     break
 
-        # Load best checkpoint
         self._load_checkpoint()
 
-        # Evaluate on test set
-        metrics = self._evaluate(X_test, y_test)
-        metrics['val_loss'] = float(best_val_loss)
-        metrics['epochs_trained'] = epoch + 1
-        metrics['trained_at'] = datetime.now().isoformat()
+        self.split_metadata = {
+            "train_end_date": split_data["train_end_date"],
+            "val_end_date": split_data["val_end_date"],
+            "lookback_days": split_data["lookback_days"],
+            "train_target_indices": split_data["train_target_indices"],
+            "val_target_indices": split_data["val_target_indices"],
+            "test_target_indices": split_data["test_target_indices"],
+        }
 
-        logger.info(f"[{self.model_name}] ✅ RMSE: {metrics['rmse']:,.0f} VND | "
-                     f"MAPE: {metrics['mape']:.2f}% | "
-                     f"Direction: {metrics['directional_accuracy']:.1f}%")
+        metrics = self._evaluate(test_split["X"], test_split["y"])
+        metrics["val_loss"] = float(best_val_loss)
+        metrics["epochs_trained"] = epoch + 1
+        metrics["trained_at"] = datetime.now().isoformat()
+        metrics.update(
+            {
+                "train_end_date": split_data["train_end_date"],
+                "val_end_date": split_data["val_end_date"],
+                "lookback_days": self.lookback_days,
+                "feature_cols": list(self.feature_cols),
+            }
+        )
+
+        logger.info(
+            f"[{self.model_name}] RMSE: {metrics['rmse']:,.0f} VND | "
+            f"MAPE: {metrics['mape']:.2f}% | "
+            f"Direction: {metrics['directional_accuracy']:.1f}%"
+        )
 
         return metrics
 
     def _evaluate(self, X_test, y_test) -> dict:
-        """Đánh giá model trên test set."""
         self.model.eval()
         loader = DataLoader(
             TensorDataset(torch.FloatTensor(X_test), torch.FloatTensor(y_test)),
-            batch_size=BATCH_SIZE
+            batch_size=self.batch_size,
         )
 
         all_preds, all_targets = [], []
         with torch.no_grad():
             for xb, yb in loader:
-                all_preds.extend(self.model(xb.to(DEVICE)).cpu().numpy())
+                all_preds.extend(self.model(xb.to(self.device)).cpu().numpy())
                 all_targets.extend(yb.numpy())
 
-        # Inverse transform → giá thật (VND)
-        preds = self.target_scaler.inverse_transform(
-            np.array(all_preds).reshape(-1, 1)).flatten()
-        targets = self.target_scaler.inverse_transform(
-            np.array(all_targets).reshape(-1, 1)).flatten()
+        preds = self.target_scaler.inverse_transform(np.array(all_preds).reshape(-1, 1)).flatten()
+        targets = self.target_scaler.inverse_transform(np.array(all_targets).reshape(-1, 1)).flatten()
 
         rmse = np.sqrt(np.mean((preds - targets) ** 2))
         mae = np.mean(np.abs(preds - targets))
-        # Tránh chia cho 0 khi targets = 0 (giá cổ phiếu không bao giờ = 0, nhưng an toàn)
         mape = np.mean(np.abs((targets - preds) / np.where(targets == 0, 1, targets))) * 100
 
-        # Directional accuracy: model dự đoán đúng hướng tăng/giảm so với ngày trước không?
-        # Ý nghĩa thực tế: ngày hôm nay, predicted[i] > actual[i-1] → model nói "tăng"
-        # So sánh với: actual[i] > actual[i-1] → thực tế có tăng không?
         if len(preds) > 1:
-            pred_direction  = np.sign(preds[1:]  - targets[:-1])   # dự đoán: so với giá thực hôm qua
-            actual_direction = np.sign(targets[1:] - targets[:-1])  # thực tế: so với giá thực hôm qua
+            pred_direction = np.sign(preds[1:] - targets[:-1])
+            actual_direction = np.sign(targets[1:] - targets[:-1])
             dir_correct = np.sum(pred_direction == actual_direction)
             dir_acc = dir_correct / (len(preds) - 1) * 100
         else:
             dir_acc = 0.0
 
         return {
-            'model_name': self.model_name,
-            'rmse': float(rmse),
-            'mae': float(mae),
-            'mape': float(mape),
-            'directional_accuracy': float(dir_acc),
-            'test_loss': float(np.mean((np.array(all_preds) - np.array(all_targets))**2)),
+            "model_name": self.model_name,
+            "rmse": float(rmse),
+            "mae": float(mae),
+            "mape": float(mape),
+            "directional_accuracy": float(dir_acc),
+            "test_loss": float(np.mean((np.array(all_preds) - np.array(all_targets)) ** 2)),
         }
 
     def predict_next(self, df: pd.DataFrame) -> float:
-        """
-        Predict giá ngày tiếp theo.
+        if len(df) < self.lookback_days:
+            raise ValueError(
+                f"Need at least {self.lookback_days} rows for prediction, got {len(df)}."
+            )
 
-        Args:
-            df: DataFrame chứa ít nhất LOOKBACK_DAYS dòng gần nhất
-
-        Returns:
-            Giá dự đoán (VND)
-        """
         self.model.eval()
-        features = df[self.feature_cols].values[-LOOKBACK_DAYS:]
+        features = df[self.feature_cols].values[-self.lookback_days:]
         features_scaled = self.feature_scaler.transform(features)
 
-        X = torch.FloatTensor(features_scaled).unsqueeze(0).to(DEVICE)
+        X = torch.FloatTensor(features_scaled).unsqueeze(0).to(self.device)
         with torch.no_grad():
             pred_scaled = self.model(X).cpu().numpy()
 
-        return float(self.target_scaler.inverse_transform(
-            pred_scaled.reshape(-1, 1)).flatten()[0])
+        return float(self.target_scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()[0])
 
     def save(self, name=None):
-        """Lưu model + scalers."""
         name = name or self.model_name
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         path = MODEL_DIR / f"tcb_{name}.pt"
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'model_name': self.model_name,
-            'feature_cols': self.feature_cols,
-            'feature_scaler': {k: getattr(self.feature_scaler, k).tolist()
-                               for k in ['data_min_', 'scale_', 'data_range_', 'data_max_']},
-            'target_scaler': {k: getattr(self.target_scaler, k).tolist()
-                              for k in ['data_min_', 'scale_', 'data_range_', 'data_max_']},
-            'history': self.history,
-            'saved_at': datetime.now().isoformat()
-        }, path)
-        logger.info(f"💾 Model saved: {path}")
+        torch.save(
+            {
+                "model_state_dict": self.model.state_dict(),
+                "model_name": self.model_name,
+                "feature_cols": self.feature_cols,
+                "feature_scaler": {
+                    key: getattr(self.feature_scaler, key).tolist()
+                    for key in ["data_min_", "scale_", "data_range_", "data_max_"]
+                },
+                "target_scaler": {
+                    key: getattr(self.target_scaler, key).tolist()
+                    for key in ["data_min_", "scale_", "data_range_", "data_max_"]
+                },
+                "history": self.history,
+                "saved_at": datetime.now().isoformat(),
+                "lookback_days": self.lookback_days,
+                "epochs": self.epochs,
+                "batch_size": self.batch_size,
+                "learning_rate": self.learning_rate,
+                "train_ratio": self.train_ratio,
+                "val_ratio": self.val_ratio,
+                "split_metadata": self.split_metadata,
+            },
+            path,
+        )
+        logger.info(f"Model saved: {path}")
 
     def load(self, name=None):
-        """Load model đã lưu."""
         name = name or self.model_name
         path = MODEL_DIR / f"tcb_{name}.pt"
-        ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
 
-        self.feature_cols = ckpt['feature_cols']
-        self.model = self.build_model(input_size=len(self.feature_cols)).to(DEVICE)
-        self.model.load_state_dict(ckpt['model_state_dict'])
+        self.lookback_days = ckpt.get("lookback_days", self.lookback_days)
+        self.epochs = ckpt.get("epochs", self.epochs)
+        self.batch_size = ckpt.get("batch_size", self.batch_size)
+        self.learning_rate = ckpt.get("learning_rate", self.learning_rate)
+        self.train_ratio = ckpt.get("train_ratio", self.train_ratio)
+        self.val_ratio = ckpt.get("val_ratio", self.val_ratio)
+        self.split_metadata = ckpt.get("split_metadata", {})
+
+        self.feature_cols = ckpt["feature_cols"]
+        self.model = self.build_model(input_size=len(self.feature_cols)).to(self.device)
+        self.model.load_state_dict(ckpt["model_state_dict"])
         self.model.eval()
 
-        # Restore scalers
-        for attr, key in [('feature_scaler', 'feature_scaler'),
-                          ('target_scaler', 'target_scaler')]:
+        for attr, key in [("feature_scaler", "feature_scaler"), ("target_scaler", "target_scaler")]:
             scaler = MinMaxScaler()
-            for k, v in ckpt[key].items():
-                setattr(scaler, k, np.array(v))
-            scaler.n_features_in_ = len(ckpt[key]['data_min_'])
+            for scaler_key, value in ckpt[key].items():
+                setattr(scaler, scaler_key, np.array(value))
+            scaler.n_features_in_ = len(ckpt[key]["data_min_"])
             setattr(self, attr, scaler)
 
-        logger.info(f"📂 Model loaded: {path}")
+        logger.info(f"Model loaded: {path}")
 
     def _save_checkpoint(self):
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         torch.save(self.model.state_dict(), MODEL_DIR / f"_checkpoint_{self.model_name}.pt")
 
     def _load_checkpoint(self):
-        self.model.load_state_dict(
-            torch.load(MODEL_DIR / f"_checkpoint_{self.model_name}.pt",
-                        map_location=DEVICE, weights_only=True))
+        checkpoint_path = MODEL_DIR / f"_checkpoint_{self.model_name}.pt"
+        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=True))

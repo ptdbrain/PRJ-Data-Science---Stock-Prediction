@@ -7,7 +7,7 @@ Train 3 models (LSTM, GRU, Transformer), so sánh kết quả,
 lưu metrics vào model_metrics table, đánh dấu best model.
 """
 import pandas as pd
-from loguru import logger
+from utils.logger import logger
 from database.connection import read_table, write_table, get_connection
 from config.settings import ALL_FEATURES
 

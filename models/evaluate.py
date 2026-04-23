@@ -6,7 +6,7 @@ Chạy: python -m models.evaluate
 In bảng so sánh metrics + vẽ biểu đồ.
 """
 import pandas as pd
-from loguru import logger
+from utils.logger import logger
 from database.connection import read_table
 
 logger.add("logs/evaluate.log", rotation="1 week")

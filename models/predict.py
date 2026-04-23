@@ -11,10 +11,10 @@ Các hàm:
 """
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from loguru import logger
+from datetime import datetime
+from utils.logger import logger
 from database.connection import read_table, write_table, get_connection, table_exists
-from config.settings import LOOKBACK_DAYS, ALL_FEATURES
+from config.settings import ALL_FEATURES
 
 from models.lstm_model import LSTMPredictor
 from models.gru_model import GRUPredictor
@@ -49,7 +49,7 @@ def predict_all():
     # Load model
     model_class = MODEL_MAP[best_name]
     model = model_class()
-    model.load()
+    model.load(name=best_name)
 
     # Load data
     df = read_table("merged_features")
@@ -57,8 +57,9 @@ def predict_all():
 
     # Predict cho từng ngày (sliding window)
     predictions = []
-    for i in range(LOOKBACK_DAYS, len(df) - 1):
-        window = df.iloc[i - LOOKBACK_DAYS:i]
+    lookback_days = model.lookback_days
+    for i in range(lookback_days, len(df) - 1):
+        window = df.iloc[i - lookback_days:i]
         pred_price = model.predict_next(window)
         # target = close ngày hôm sau (do merge_features đã shift -1)
         actual_price = df.iloc[i]['target']
@@ -83,6 +84,10 @@ def predict_all():
     logger.info(f"✅ Đã lưu {len(pred_df)} predictions vào database")
 
     # Thống kê nhanh
+    if pred_df.empty:
+        logger.warning("Không tạo được prediction nào từ merged_features hiện tại.")
+        return
+
     known = pred_df.dropna(subset=['actual_price', 'predicted_price'])
     if not known.empty:
         errors = np.abs(known['predicted_price'] - known['actual_price'])

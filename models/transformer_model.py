@@ -13,8 +13,8 @@ from config.settings import HIDDEN_SIZE, NUM_LAYERS, DROPOUT
 
 class TransformerPredictor(BasePredictor):
 
-    def __init__(self):
-        super().__init__(model_name="transformer")
+    def __init__(self, **kwargs):
+        super().__init__(model_name="transformer", **kwargs)
 
     def build_model(self, input_size: int) -> nn.Module:
         """Trả về Transformer Encoder model.
