@@ -27,11 +27,7 @@ CLEAN_PRICES_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS clean_prices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT NOT NULL,
-        open REAL,
-        high REAL,
-        low REAL,
-        close REAL,
-        volume REAL,
+        open REAL, high REAL, low REAL, close REAL, volume REAL,
         sma_10 REAL, sma_20 REAL, sma_50 REAL,
         ema_12 REAL, ema_26 REAL,
         rsi_14 REAL,
@@ -40,6 +36,13 @@ CLEAN_PRICES_TABLE_SQL = """
         atr_14 REAL, obv REAL,
         price_change REAL, price_change_5d REAL,
         volatility_10d REAL, volume_sma_10 REAL,
+        -- Stationary features (relative / percentage)
+        close_ret REAL, open_ret REAL, high_ret REAL, low_ret REAL,
+        volume_ratio REAL,
+        sma_10_dist REAL, sma_20_dist REAL, sma_50_dist REAL,
+        ema_12_dist REAL, ema_26_dist REAL,
+        bb_position REAL, bb_width REAL,
+        atr_pct REAL, obv_change REAL, volatility_pct REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(date)
     )
@@ -71,9 +74,11 @@ CLEAN_NEWS_TABLE_SQL = """
         sentiment_neu REAL,
         sentiment_score REAL,
         sentiment_label TEXT,
+        tfidf_sentiment REAL,          -- Classical NLP score
         embedding_score REAL,
         embedding_label TEXT,
         daily_sentiment REAL,
+        daily_tfidf_sentiment REAL,    -- Daily avg classical NLP
         news_count INTEGER,
         embedding TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -136,10 +141,12 @@ FEATURES_FINANCE_TABLE_SQL = """
         debt_to_equity REAL,
         net_profit_margin REAL,
         financial_leverage REAL,
+        eps REAL,                  -- Earnings Per Share
         roe_yoy REAL,
         roa_yoy REAL,
         roe_lag4 REAL,
         roa_lag4 REAL,
+        eps_yoy REAL,              -- EPS YoY growth
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(symbol, date)
     )
@@ -158,14 +165,27 @@ MERGED_FEATURES_TABLE_SQL = """
         atr_14 REAL, obv REAL,
         price_change REAL, price_change_5d REAL,
         volatility_10d REAL, volume_sma_10 REAL,
+        -- Stationary features (relative / percentage)
+        close_ret REAL, open_ret REAL, high_ret REAL, low_ret REAL,
+        volume_ratio REAL,
+        sma_10_dist REAL, sma_20_dist REAL, sma_50_dist REAL,
+        ema_12_dist REAL, ema_26_dist REAL,
+        bb_position REAL, bb_width REAL,
+        atr_pct REAL, obv_change REAL, volatility_pct REAL,
+        -- Finance features
         roe REAL, roa REAL, debt_to_equity REAL,
         net_profit_margin REAL, financial_leverage REAL,
+        eps REAL, eps_yoy REAL,
         roe_yoy REAL, roa_yoy REAL, roe_lag4 REAL, roa_lag4 REAL,
+        -- Sentiment features
         daily_sentiment REAL,
         news_count INTEGER,
         embedding_score_mean REAL,
         embedding_score_std REAL,
-        target REAL,
+        tfidf_sentiment REAL,
+        -- Target & display
+        target INTEGER,
+        next_close REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(date)
     )
@@ -222,9 +242,9 @@ PREDICTIONS_TABLE_SQL = """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT,
         model_name TEXT,
-        predicted_price REAL,
-        actual_price REAL,
-        error_pct REAL,
+        predicted_proba REAL,          -- P(TĂNG) ∈ [0, 1]
+        predicted_trend INTEGER,       -- 1=TĂNG, 0=GIẢM
+        actual_trend INTEGER,          -- Ground truth (nếu đã biết)
         predicted_at DATETIME,
         updated_at DATETIME,
         UNIQUE(date, model_name)
@@ -235,11 +255,20 @@ MODEL_METRICS_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS model_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         model_name TEXT UNIQUE NOT NULL,
-        rmse REAL, mae REAL, mape REAL,
-        directional_accuracy REAL,
-        train_loss REAL, val_loss REAL, test_loss REAL,
+        -- Classification metrics
+        accuracy REAL,
+        precision REAL,
+        recall REAL,
+        f1 REAL,
+        roc_auc REAL,
+        -- Training info
+        val_loss REAL,
+        test_loss REAL,
         epochs_trained INTEGER,
         trained_at DATETIME,
+        train_end_date TEXT,
+        val_end_date TEXT,
+        lookback_days INTEGER,
         is_best INTEGER DEFAULT 0
     )
 """

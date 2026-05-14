@@ -53,7 +53,16 @@ def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     if "target" not in df.columns:
         if "close" not in df.columns:
             raise ValueError("`close` column required to build target")
-        df["target"] = df["close"].shift(-1)
+        df["next_close"] = df["close"].shift(-1)
+        df = df.dropna(subset=["next_close"]).reset_index(drop=True)
+        df["target"] = (df["next_close"] > df["close"]).astype(int)
+    else:
+        target_values = df["target"].dropna().unique()
+        if not set(target_values).issubset({0, 1}):
+            raise ValueError(
+                "`target` must be binary 0/1 for classification. "
+                "Run preprocessing.merge_features again to rebuild labels."
+            )
 
     return df
 

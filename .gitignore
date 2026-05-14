@@ -71,3 +71,4 @@ logs/*.log
 # DATA EXPORTS (cho Phase 3)
 # ============================================
 cloud_app/data/*.csv
+tests/

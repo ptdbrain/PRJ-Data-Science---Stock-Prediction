@@ -25,20 +25,21 @@ class ModelDefaultTests(unittest.TestCase):
             loaded_name = None
             feature_cols = ["open"]
             lookback_days = 2
+            threshold = 0.5
 
             def load(self, name=None):
                 type(self).loaded_name = name
 
-            def predict_next(self, df):
-                return float(df["open"].iloc[-1])
+            def predict_proba(self, df):
+                return 0.75
 
-        metrics_df = pd.DataFrame([{"model_name": "lstm", "mape": 1.0, "is_best": 1}])
+        metrics_df = pd.DataFrame([{"model_name": "lstm", "accuracy": 60.0, "is_best": 1}])
         merged_df = pd.DataFrame(
             [
-                {"date": "2024-01-01", "open": 10.0, "target": 11.0},
-                {"date": "2024-01-02", "open": 11.0, "target": 12.0},
-                {"date": "2024-01-03", "open": 12.0, "target": 13.0},
-                {"date": "2024-01-04", "open": 13.0, "target": 14.0},
+                {"date": "2024-01-01", "open": 10.0, "target": 0},
+                {"date": "2024-01-02", "open": 11.0, "target": 1},
+                {"date": "2024-01-03", "open": 12.0, "target": 0},
+                {"date": "2024-01-04", "open": 13.0, "target": 1},
             ]
         )
 
@@ -51,13 +52,19 @@ class ModelDefaultTests(unittest.TestCase):
                 return merged_df
             raise ValueError(name)
 
-        with patch.dict(predict_module.MODEL_MAP, {"lstm": FakeModel}, clear=True), patch.object(
+        with patch.dict(predict_module.DEEP_MODEL_MAP, {"lstm": FakeModel}, clear=True), patch.object(
             predict_module, "read_table", side_effect=fake_read_table
-        ), patch.object(predict_module, "write_table", side_effect=lambda df, name: saved.setdefault(name, df.copy())):
+        ), patch.object(
+            predict_module,
+            "write_table",
+            side_effect=lambda df, name, **kwargs: saved.setdefault(name, df.copy()),
+        ):
             predict_module.predict_all()
 
         self.assertEqual(saved["predictions"]["model_name"].iloc[0], "lstm")
         self.assertEqual(FakeModel.loaded_name, "lstm")
+        self.assertEqual(saved["predictions"]["date"].tolist(), ["2024-01-03", "2024-01-04"])
+        self.assertEqual(saved["predictions"]["actual_trend"].tolist(), [0, 1])
 
 
 if __name__ == "__main__":

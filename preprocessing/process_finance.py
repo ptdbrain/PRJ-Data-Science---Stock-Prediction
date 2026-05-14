@@ -85,12 +85,22 @@ def process_and_engineer_finance():
         "debt_to_equity",
         "net_profit_margin",
         "financial_leverage",
+        "eps",    # Earnings Per Share — cột mới
     ]
-    required_cols = ["date"] + feature_cols
-    missing_cols = [column for column in required_cols if column not in df.columns]
+    # eps là cột tùy chọn (có thể thiếu trong dữ liệu cũ)
+    base_required = ["date", "roe", "roa", "debt_to_equity", "net_profit_margin", "financial_leverage"]
+    missing_cols = [column for column in base_required if column not in df.columns]
     if missing_cols:
         logger.error(f"Thiếu cột: {missing_cols}")
         return None
+
+    if "eps" not in df.columns:
+        if "eps_vnd" in df.columns:
+            logger.info("Mapping 'eps_vnd' -> 'eps'")
+            df["eps"] = df["eps_vnd"]
+        else:
+            logger.warning("Cột 'eps'/'eps_vnd' không có trong raw_finance — bỏ qua EPS features")
+            feature_cols = [c for c in feature_cols if c != "eps"]
 
     df = _prepare_finance_dates(df)
     keep_cols = ["symbol", "date", "period_end_date", "effective_date"] + feature_cols
@@ -121,6 +131,11 @@ def process_and_engineer_finance():
     for column in ["roe", "roa"]:
         df[f"{column}_yoy"] = df[column].pct_change(periods=4) * 100
         df[f"{column}_lag4"] = df[column].shift(4)
+
+    # EPS YoY (tăng trưởng EPS so với cùng quý năm trước)
+    if "eps" in df.columns:
+        df["eps_yoy"] = df["eps"].pct_change(periods=4) * 100
+        df["eps_yoy"] = df["eps_yoy"].replace([np.inf, -np.inf], np.nan)
 
     for column in ["roe_yoy", "roa_yoy"]:
         df[column] = df[column].replace([np.inf, -np.inf], np.nan)

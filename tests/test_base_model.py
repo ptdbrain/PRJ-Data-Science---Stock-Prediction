@@ -41,9 +41,9 @@ class BasePredictorDatasetTests(unittest.TestCase):
             target_col="target",
         )
 
-        self.assertEqual(splits["train_target_indices"], [3, 4, 5])
-        self.assertEqual(splits["val_target_indices"], [6, 7])
-        self.assertEqual(splits["test_target_indices"], [8, 9])
+        self.assertEqual(splits["train"]["target_indices"], [3, 4, 5])
+        self.assertEqual(splits["val"]["target_indices"], [6, 7])
+        self.assertEqual(splits["test"]["target_indices"], [8, 9])
 
     def test_prepare_time_series_data_tracks_boundary_dates(self):
         model = _DummyPredictor(lookback_days=3, train_ratio=0.6, val_ratio=0.2)

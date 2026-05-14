@@ -112,6 +112,27 @@ class MergeFeaturesTests(unittest.TestCase):
         self.assertNotIn("raw_finance", read_calls)
         self.assertNotIn("roe", merged.columns)
 
+    def test_merge_features_drops_last_row_without_future_close(self):
+        news = pd.DataFrame(columns=["date", "sentiment_score", "embedding_score"])
+
+        def fake_read_table(name):
+            if name == "clean_prices":
+                return _build_clean_prices()
+            if name == "features_finance":
+                raise ValueError("features_finance missing")
+            if name == "clean_news":
+                return news
+            raise ValueError(name)
+
+        with patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
+            merge_features_module, "write_table"
+        ):
+            merged = merge_features_module.merge_features()
+
+        self.assertEqual(merged["date"].tolist(), ["2024-04-29", "2024-04-30", "2024-05-01"])
+        self.assertTrue(merged["next_close"].notna().all())
+        self.assertEqual(merged["target"].tolist(), [1, 1, 1])
+
 
 if __name__ == "__main__":
     unittest.main()

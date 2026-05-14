@@ -78,6 +78,7 @@ def _merge_news_features(merged: pd.DataFrame) -> pd.DataFrame:
         merged["news_count"] = 0
         merged["embedding_score_mean"] = 0.0
         merged["embedding_score_std"] = 0.0
+        merged["tfidf_sentiment"] = 0.0
         return merged
 
     news = news.copy()
@@ -90,6 +91,7 @@ def _merge_news_features(merged: pd.DataFrame) -> pd.DataFrame:
             news_count=("date", "size"),
             embedding_score_mean=("embedding_score", "mean"),
             embedding_score_std=("embedding_score", "std"),
+            tfidf_sentiment=("tfidf_sentiment", "mean"),   # TF-IDF classical NLP
         )
         .reset_index()
     )
@@ -99,6 +101,7 @@ def _merge_news_features(merged: pd.DataFrame) -> pd.DataFrame:
     merged["news_count"] = merged["news_count"].fillna(0).astype(int)
     merged["embedding_score_mean"] = merged["embedding_score_mean"].fillna(0.0)
     merged["embedding_score_std"] = merged["embedding_score_std"].fillna(0.0)
+    merged["tfidf_sentiment"] = merged["tfidf_sentiment"].fillna(0.0)
     return merged
 
 
@@ -109,9 +112,27 @@ def merge_features():
     merged = _merge_finance_features(prices)
     merged = _merge_news_features(merged)
 
-    merged["target"] = merged["close"].shift(-1)
+    # ================================================================
+    # Target: nhãn phân loại nhị phân (Classification)
+    # 1 = giá ngày mai TĂNG so với hôm nay
+    # 0 = giá ngày mai GIẢM hoặc ĐI NGANG
+    # Lưu ý: shift(-1) → dùng giá ngày khác (không có look-ahead bias
+    # vì cột này chỉ xuất hiện lúc train, không dùng khi inference)
+    # ================================================================
+    # Lưu giá thực tế của ngày mai để hiển thị trên dashboard.
+    # Dòng cuối chưa có giá ngày mai nên không được ép thành target=0.
+    merged["next_close"] = merged["close"].shift(-1)
+    merged = merged.dropna(subset=["next_close"]).reset_index(drop=True)
+    merged["target"] = (merged["next_close"] > merged["close"]).astype(int)
 
-    required_feature_columns = [column for column in ALL_FEATURES if column in merged.columns]
+    # Các cột optional (có thể thiếu hoặc toàn NaN với data cũ) — không ép dropna
+    OPTIONAL_FEATURES = {"eps", "eps_yoy", "tfidf_sentiment", "daily_tfidf_sentiment",
+                         "embedding_score_mean", "embedding_score_std",
+                         "obv_change", "volatility_pct"}
+    required_feature_columns = [
+        column for column in ALL_FEATURES
+        if column in merged.columns and column not in OPTIONAL_FEATURES
+    ]
     merged = merged.dropna(subset=required_feature_columns + ["target"]).reset_index(drop=True)
 
     merged["date"] = pd.to_datetime(merged["date"]).dt.strftime("%Y-%m-%d")

@@ -84,14 +84,14 @@ def _predict_with_deep_model(model_name: str, df: pd.DataFrame, feature_cols: li
     logger.info(f"  Using threshold: {threshold:.3f}")
 
     predictions = []
-    for i in range(lookback, len(df) - 1):
+    for i in range(lookback, len(df)):
         window = df.iloc[i - lookback:i]
         proba = model.predict_proba(window)
         trend = int(proba >= threshold)
         actual_trend = int(df.iloc[i]["target"]) if "target" in df.columns else None
 
         predictions.append({
-            "date": df.iloc[i + 1]["date"],
+            "date": df.iloc[i]["date"],
             "model_name": model_name,
             "predicted_proba": round(proba, 6),
             "predicted_trend": trend,
@@ -123,14 +123,14 @@ def _predict_with_sklearn_model(model_name: str, df: pd.DataFrame, feature_cols:
     features_scaled = scaler.transform(features)
 
     predictions = []
-    for i in range(LOOKBACK_DAYS, len(df) - 1):
+    for i in range(LOOKBACK_DAYS, len(df)):
         window = features_scaled[i - LOOKBACK_DAYS:i].flatten().reshape(1, -1)
         proba = float(clf.predict_proba(window)[0][1])
         trend = int(proba >= threshold)
         actual_trend = int(df.iloc[i]["target"]) if "target" in df.columns else None
 
         predictions.append({
-            "date": df.iloc[i + 1]["date"],
+            "date": df.iloc[i]["date"],
             "model_name": model_name,
             "predicted_proba": round(proba, 6),
             "predicted_trend": trend,
@@ -182,8 +182,8 @@ def predict_all():
         acc = accuracy_score(known["actual_trend"], known["predicted_trend"]) * 100
         f1 = f1_score(known["actual_trend"], known["predicted_trend"], zero_division=0)
         up_pred = known["predicted_trend"].mean() * 100
-        logger.info(f"  Accuracy (known): {acc:.1f}%")
-        logger.info(f"  F1 (known):       {f1:.4f}")
+        logger.info(f"  Accuracy (all known dates, includes train history): {acc:.1f}%")
+        logger.info(f"  F1 (all known dates, includes train history):       {f1:.4f}")
         logger.info(f"  % Dự đoán Tăng:  {up_pred:.1f}%")
 
 

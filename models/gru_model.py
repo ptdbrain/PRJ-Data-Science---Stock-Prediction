@@ -1,8 +1,12 @@
 """
-GRU Model cho dự đoán giá TCB.
-══════════════════════════════
-Phụ trách: Thành viên E
-Branch: feature/model-gru
+GRU Model cho dự đoán xu hướng giá TCB (Classification).
+══════════════════════════════════════════════════════════
+GRU (Gated Recurrent Unit) — biến thể nhẹ hơn LSTM:
+  - Ít parameters hơn (~75% so với LSTM cùng kích thước)
+  - Train nhanh hơn (~20-30%)
+  - Thường hiệu quả tương đương hoặc tốt hơn trên chuỗi ngắn
+
+Output: raw logit (BCEWithLogitsLoss được áp dụng trong BasePredictor.fit)
 """
 import torch
 import torch.nn as nn
@@ -16,12 +20,7 @@ class GRUPredictor(BasePredictor):
         super().__init__(model_name="gru", **kwargs)
 
     def build_model(self, input_size: int) -> nn.Module:
-        """Trả về GRU model.
-
-        GRU (Gated Recurrent Unit) — biến thể nhẹ hơn LSTM:
-        - Ít parameters hơn (~75% so với LSTM cùng kích thước)
-        - Train nhanh hơn (~20-30%)
-        - Thường hiệu quả tương đương hoặc tốt hơn trên chuỗi ngắn
+        """Trả về GRU model với output là raw logit (1 neuron).
 
         Kiến trúc:
             Input → GRU(2 layers, hidden=128) → FC(128→64) → ReLU → Dropout → FC(64→1)
@@ -40,14 +39,12 @@ class GRUPredictor(BasePredictor):
                     nn.Linear(HIDDEN_SIZE, 64),
                     nn.ReLU(),
                     nn.Dropout(DROPOUT),
-                    nn.Linear(64, 1)
+                    nn.Linear(64, 1),
                 )
 
             def forward(self, x):
-                # x: (batch, seq_len, input_size)
-                gru_out, _ = self.gru(x)         # (batch, seq_len, hidden_size)
-                last_hidden = gru_out[:, -1, :]  # lấy timestep cuối
-                out = self.fc(last_hidden)        # (batch, 1)
-                return out.squeeze(-1)
+                gru_out, _ = self.gru(x)
+                last_hidden = gru_out[:, -1, :]
+                return self.fc(last_hidden).squeeze(-1)  # raw logit
 
         return GRUNet(input_size)

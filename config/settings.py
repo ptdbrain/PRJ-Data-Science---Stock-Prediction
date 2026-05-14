@@ -72,19 +72,22 @@ VAL_RATIO = 0.15
 TEST_RATIO = 0.15
 
 # ============================
-# Feature Columns
+# Feature Columns (STATIONARY — tỷ lệ %, không phải giá tuyệt đối)
 # ============================
-PRICE_FEATURES = ['open', 'high', 'low', 'close', 'volume']
+# Log returns thay vì giá tuyệt đối
+PRICE_FEATURES = ['close_ret', 'open_ret', 'high_ret', 'low_ret', 'volume_ratio']
 
+# Tất cả đều là stationary (bounded / relative)
 TECHNICAL_FEATURES = [
-    'sma_10', 'sma_20', 'sma_50',
-    'ema_12', 'ema_26',
-    'rsi_14',
-    'macd', 'macd_signal', 'macd_hist',
-    'bb_upper', 'bb_middle', 'bb_lower',
-    'atr_14', 'obv',
-    'price_change', 'price_change_5d',
-    'volatility_10d', 'volume_sma_10'
+    'sma_10_dist', 'sma_20_dist', 'sma_50_dist',   # % distance from close
+    'ema_12_dist', 'ema_26_dist',                    # % distance from close
+    'rsi_14',                                         # Already bounded [0, 100]
+    'macd', 'macd_signal', 'macd_hist',              # Near-stationary oscillators
+    'bb_position', 'bb_width',                        # Relative (replaces bb_upper/middle/lower)
+    'atr_pct',                                        # % of close (replaces atr_14)
+    'obv_change',                                     # % change (replaces obv)
+    'price_change', 'price_change_5d',               # Already stationary
+    'volatility_pct',                                 # % of close (replaces volatility_10d)
 ]
 
 # Khớp với `process_finance` (features_finance) sau bước feature engineering
@@ -92,18 +95,26 @@ FINANCE_FEATURES = [
     'roe', 'roa', 'debt_to_equity',
     'net_profit_margin', 'financial_leverage',
     'roe_yoy', 'roa_yoy', 'roe_lag4', 'roa_lag4',
-    # NOTE: pe_ratio, pb_ratio chỉ có trong raw_finance,
-    # không có trong features_finance → đã xóa để tránh confusion
+    'eps',          # Earnings Per Share
+    'eps_yoy',      # EPS YoY growth
 ]
 
+# Sentiment features: PhoBERT (DL) + TF-IDF (classical NLP)
 SENTIMENT_FEATURES = [
-    'daily_sentiment',
+    'daily_sentiment',      # PhoBERT score trung bình ngày
     'news_count',
     'embedding_score_mean',
     'embedding_score_std',
+    'tfidf_sentiment',      # TF-IDF / Lexicon classical NLP score
 ]
 
 ALL_FEATURES = PRICE_FEATURES + TECHNICAL_FEATURES + FINANCE_FEATURES + SENTIMENT_FEATURES
+
+# ============================
+# Classification Settings
+# ============================
+# Ngưỡng xác suất để quyết định nhãn (>= TREND_THRESHOLD → Tăng)
+TREND_THRESHOLD = 0.5
 
 # Quarter-specific reporting lag rules for when financial data becomes available.
 FINANCE_REPORT_LAG_DAYS = {
