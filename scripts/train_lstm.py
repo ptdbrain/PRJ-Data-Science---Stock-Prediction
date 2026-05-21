@@ -53,9 +53,11 @@ def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     if "target" not in df.columns:
         if "close" not in df.columns:
             raise ValueError("`close` column required to build target")
-        df["next_close"] = df["close"].shift(-1)
+        df["next_close"] = df["close"].shift(-settings.TARGET_HORIZON_DAYS)
+        df["target_horizon_days"] = settings.TARGET_HORIZON_DAYS
+        df["forward_return"] = df["next_close"] / df["close"] - 1.0
         df = df.dropna(subset=["next_close"]).reset_index(drop=True)
-        df["target"] = (df["next_close"] > df["close"]).astype(int)
+        df["target"] = (df["forward_return"] > settings.MIN_TARGET_RETURN).astype(int)
     else:
         target_values = df["target"].dropna().unique()
         if not set(target_values).issubset({0, 1}):

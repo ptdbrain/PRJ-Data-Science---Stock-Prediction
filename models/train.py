@@ -32,7 +32,7 @@ def get_feature_cols(df: pd.DataFrame) -> list:
 
 
 def train_all_models():
-    """Train tất cả models và so sánh theo F1-score."""
+    """Train tất cả models và chọn best theo ROC-AUC."""
     logger.info("=" * 60)
     logger.info("BẮT ĐẦU TRAINING TẤT CẢ MODELS (Classification)")
     logger.info("=" * 60)
@@ -100,10 +100,11 @@ def train_all_models():
         if col not in metrics_df.columns:
             metrics_df[col] = None
 
-    # Best = Accuracy cao nhất (F1 bị lệch khi model predict tất cả UP)
-    valid_acc = metrics_df["accuracy"].dropna()
-    if not valid_acc.empty:
-        best_idx = valid_acc.idxmax()
+    # Best = ROC-AUC cao nhất. Accuracy dễ bị đánh lừa khi test set lệch class
+    # hoặc model đoán gần như toàn DOWN/UP.
+    valid_auc = metrics_df["roc_auc"].dropna()
+    if not valid_auc.empty:
+        best_idx = valid_auc.idxmax()
         metrics_df["is_best"] = 0
         metrics_df.loc[best_idx, "is_best"] = 1
     else:
@@ -119,7 +120,7 @@ def train_all_models():
     logger.info(f"{'Model':<25} {'Acc (%)':>9} {'Precision':>10} {'Recall':>8} {'F1':>8} {'AUC':>8} {'Best':>6}")
     logger.info("-" * 75)
 
-    for _, row in metrics_df.sort_values("accuracy", ascending=False).iterrows():
+    for _, row in metrics_df.sort_values("roc_auc", ascending=False).iterrows():
         best_tag = "***" if row.get("is_best") else ""
         logger.info(
             f"  {row['model_name']:<23} "
@@ -133,7 +134,7 @@ def train_all_models():
 
     best_name = metrics_df.loc[metrics_df["is_best"] == 1, "model_name"].values
     if len(best_name) > 0:
-        logger.info(f"\nBest model (by Accuracy): {best_name[0]}")
+        logger.info(f"\nBest model (by ROC-AUC): {best_name[0]}")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ install_loguru_stub()
 import models.predict as predict_module
 import scripts.predict_lstm as predict_lstm_script
 import scripts.train_lstm as train_lstm_script
+from models.predict import make_prediction_signal
 
 
 class ModelDefaultTests(unittest.TestCase):
@@ -65,6 +66,11 @@ class ModelDefaultTests(unittest.TestCase):
         self.assertEqual(FakeModel.loaded_name, "lstm")
         self.assertEqual(saved["predictions"]["date"].tolist(), ["2024-01-03", "2024-01-04"])
         self.assertEqual(saved["predictions"]["actual_trend"].tolist(), [0, 1])
+
+    def test_prediction_signal_uses_no_trade_margin_around_threshold(self):
+        self.assertEqual(make_prediction_signal(0.56, threshold=0.5, margin=0.05), 1)
+        self.assertEqual(make_prediction_signal(0.44, threshold=0.5, margin=0.05), 0)
+        self.assertEqual(make_prediction_signal(0.50, threshold=0.5, margin=0.05), -1)
 
 
 if __name__ == "__main__":

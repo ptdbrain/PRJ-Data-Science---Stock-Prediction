@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from utils.logger import logger
 from database.connection import read_table, write_table, get_connection, table_exists
-from config.settings import ALL_FEATURES, DEFAULT_MODEL_NAME, TREND_THRESHOLD
+from config.settings import ALL_FEATURES, DEFAULT_MODEL_NAME, NO_TRADE_MARGIN, TREND_THRESHOLD
 
 from models.lstm_model import LSTMPredictor
 from models.gru_model import GRUPredictor
@@ -36,12 +36,33 @@ DEEP_MODEL_MAP = {
 SKLEARN_MODEL_NAMES = {"logistic_regression", "random_forest"}
 
 
+def make_prediction_signal(
+    proba: float,
+    threshold: float,
+    margin: float = NO_TRADE_MARGIN,
+    lower_threshold: float | None = None,
+    upper_threshold: float | None = None,
+) -> int:
+    """Return 1=buy, 0=cash/sell, -1=no-trade around threshold."""
+    if lower_threshold is not None and upper_threshold is not None:
+        if proba >= upper_threshold:
+            return 1
+        if proba <= lower_threshold:
+            return 0
+        return -1
+
+    if proba >= threshold + margin:
+        return 1
+    if proba <= threshold - margin:
+        return 0
+    return -1
+
+
 def get_best_model_name() -> str:
-    """Tìm best model từ model_metrics table (dựa theo Accuracy)."""
+    """Tìm best model từ model_metrics table."""
     metrics = read_table("model_metrics")
     if not metrics.empty:
-        # Ưu tiên Accuracy (F1 misleading khi model predict tất cả UP)
-        sort_col = "accuracy" if "accuracy" in metrics.columns else "f1"
+        sort_col = "roc_auc" if "roc_auc" in metrics.columns else "accuracy"
         best_rows = metrics[metrics.get("is_best", pd.Series(0)) == 1]
         if not best_rows.empty:
             return best_rows.iloc[0]["model_name"]
@@ -81,6 +102,8 @@ def _predict_with_deep_model(model_name: str, df: pd.DataFrame, feature_cols: li
     model.load(name=model_name)
     lookback = model.lookback_days
     threshold = getattr(model, "threshold", TREND_THRESHOLD)  # Optimal threshold from training
+    lower_threshold = getattr(model, "signal_lower_threshold", None)
+    upper_threshold = getattr(model, "signal_upper_threshold", None)
     logger.info(f"  Using threshold: {threshold:.3f}")
 
     predictions = []
@@ -88,6 +111,7 @@ def _predict_with_deep_model(model_name: str, df: pd.DataFrame, feature_cols: li
         window = df.iloc[i - lookback:i]
         proba = model.predict_proba(window)
         trend = int(proba >= threshold)
+        signal = make_prediction_signal(proba, threshold, lower_threshold=lower_threshold, upper_threshold=upper_threshold)
         actual_trend = int(df.iloc[i]["target"]) if "target" in df.columns else None
 
         predictions.append({
@@ -95,7 +119,10 @@ def _predict_with_deep_model(model_name: str, df: pd.DataFrame, feature_cols: li
             "model_name": model_name,
             "predicted_proba": round(proba, 6),
             "predicted_trend": trend,
+            "prediction_signal": signal,
             "actual_trend": actual_trend,
+            "target_horizon_days": int(df.iloc[i].get("target_horizon_days", 1)),
+            "actual_forward_return": df.iloc[i].get("forward_return"),
             "predicted_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         })
@@ -117,7 +144,14 @@ def _predict_with_sklearn_model(model_name: str, df: pd.DataFrame, feature_cols:
         with open(meta_path, "r", encoding="utf-8") as fh:
             meta = json.load(fh)
             threshold = meta.get("threshold", TREND_THRESHOLD)
+            lower_threshold = meta.get("signal_lower_threshold")
+            upper_threshold = meta.get("signal_upper_threshold")
+    else:
+        lower_threshold = None
+        upper_threshold = None
     logger.info(f"  Using threshold: {threshold:.3f}")
+    if lower_threshold is not None and upper_threshold is not None:
+        logger.info(f"  Signal thresholds: cash<={lower_threshold:.3f}, buy>={upper_threshold:.3f}")
 
     features = df[feature_cols].values
     features_scaled = scaler.transform(features)
@@ -127,6 +161,7 @@ def _predict_with_sklearn_model(model_name: str, df: pd.DataFrame, feature_cols:
         window = features_scaled[i - LOOKBACK_DAYS:i].flatten().reshape(1, -1)
         proba = float(clf.predict_proba(window)[0][1])
         trend = int(proba >= threshold)
+        signal = make_prediction_signal(proba, threshold, lower_threshold=lower_threshold, upper_threshold=upper_threshold)
         actual_trend = int(df.iloc[i]["target"]) if "target" in df.columns else None
 
         predictions.append({
@@ -134,7 +169,10 @@ def _predict_with_sklearn_model(model_name: str, df: pd.DataFrame, feature_cols:
             "model_name": model_name,
             "predicted_proba": round(proba, 6),
             "predicted_trend": trend,
+            "prediction_signal": signal,
             "actual_trend": actual_trend,
+            "target_horizon_days": int(df.iloc[i].get("target_horizon_days", 1)),
+            "actual_forward_return": df.iloc[i].get("forward_return"),
             "predicted_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         })

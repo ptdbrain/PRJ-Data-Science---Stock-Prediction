@@ -46,6 +46,42 @@ def _build_clean_prices():
     return pd.DataFrame(rows)
 
 
+def _build_clean_prices_with_closes(closes):
+    rows = []
+    dates = pd.date_range("2024-01-01", periods=len(closes), freq="D")
+    for idx, (date, close) in enumerate(zip(dates, closes)):
+        base = float(close)
+        rows.append(
+            {
+                "date": date.strftime("%Y-%m-%d"),
+                "open": base,
+                "high": base + 1,
+                "low": base - 1,
+                "close": base,
+                "volume": 1000 + idx,
+                "sma_10": base,
+                "sma_20": base,
+                "sma_50": base,
+                "ema_12": base,
+                "ema_26": base,
+                "rsi_14": 55.0,
+                "macd": 0.1,
+                "macd_signal": 0.1,
+                "macd_hist": 0.0,
+                "bb_upper": base + 2,
+                "bb_middle": base,
+                "bb_lower": base - 2,
+                "atr_14": 1.0,
+                "obv": 10_000.0,
+                "price_change": 0.01,
+                "price_change_5d": 0.02,
+                "volatility_10d": 0.03,
+                "volume_sma_10": 1000.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 class MergeFeaturesTests(unittest.TestCase):
     def test_merge_features_applies_finance_only_after_effective_date(self):
         finance = pd.DataFrame(
@@ -78,7 +114,9 @@ class MergeFeaturesTests(unittest.TestCase):
                 return news
             raise ValueError(name)
 
-        with patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
+        with patch.object(merge_features_module, "TARGET_HORIZON_DAYS", 1), patch.object(
+            merge_features_module, "MIN_TARGET_RETURN", 0.0
+        ), patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
             merge_features_module,
             "write_table",
             side_effect=lambda df, name, **kwargs: saved.setdefault(name, df.copy()),
@@ -104,7 +142,9 @@ class MergeFeaturesTests(unittest.TestCase):
                 return pd.DataFrame([{"date": "2024-Q1", "roe": 999.0}])
             raise ValueError(name)
 
-        with patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
+        with patch.object(merge_features_module, "TARGET_HORIZON_DAYS", 1), patch.object(
+            merge_features_module, "MIN_TARGET_RETURN", 0.0
+        ), patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
             merge_features_module, "write_table"
         ):
             merged = merge_features_module.merge_features()
@@ -124,7 +164,9 @@ class MergeFeaturesTests(unittest.TestCase):
                 return news
             raise ValueError(name)
 
-        with patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
+        with patch.object(merge_features_module, "TARGET_HORIZON_DAYS", 1), patch.object(
+            merge_features_module, "MIN_TARGET_RETURN", 0.0
+        ), patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
             merge_features_module, "write_table"
         ):
             merged = merge_features_module.merge_features()
@@ -132,6 +174,31 @@ class MergeFeaturesTests(unittest.TestCase):
         self.assertEqual(merged["date"].tolist(), ["2024-04-29", "2024-04-30", "2024-05-01"])
         self.assertTrue(merged["next_close"].notna().all())
         self.assertEqual(merged["target"].tolist(), [1, 1, 1])
+
+    def test_merge_features_builds_configured_horizon_target_and_return(self):
+        news = pd.DataFrame(columns=["date", "sentiment_score", "embedding_score"])
+
+        def fake_read_table(name):
+            if name == "clean_prices":
+                return _build_clean_prices_with_closes([100, 101, 102, 103, 104, 106, 105])
+            if name == "features_finance":
+                raise ValueError("features_finance missing")
+            if name == "clean_news":
+                return news
+            raise ValueError(name)
+
+        with patch.object(merge_features_module, "TARGET_HORIZON_DAYS", 5), patch.object(
+            merge_features_module, "MIN_TARGET_RETURN", 0.01
+        ), patch.object(merge_features_module, "read_table", side_effect=fake_read_table), patch.object(
+            merge_features_module, "write_table"
+        ):
+            merged = merge_features_module.merge_features()
+
+        self.assertEqual(merged["date"].tolist(), ["2024-01-01", "2024-01-02"])
+        self.assertEqual(merged["next_close"].tolist(), [106.0, 105.0])
+        self.assertEqual(merged["forward_return"].round(4).tolist(), [0.06, 0.0396])
+        self.assertEqual(merged["target"].tolist(), [1, 1])
+        self.assertEqual(merged["target_1d"].tolist(), [1, 1])
 
 
 if __name__ == "__main__":

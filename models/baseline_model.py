@@ -34,6 +34,7 @@ from config.settings import (
     ALL_FEATURES,
     LOOKBACK_DAYS,
     MODEL_DIR,
+    TARGET_HORIZON_DAYS,
     TRAIN_RATIO,
     TREND_THRESHOLD,
     VAL_RATIO,
@@ -102,6 +103,15 @@ def _find_optimal_threshold_baseline(y_true: np.ndarray, y_prob: np.ndarray) -> 
             best_f1 = f1
             best_t = float(t)
     return best_t
+
+
+def _signal_thresholds_from_validation(y_prob: np.ndarray) -> tuple[float, float]:
+    """Use the middle validation probability band as no-trade territory."""
+    lower = float(np.quantile(y_prob, 0.33))
+    upper = float(np.quantile(y_prob, 0.67))
+    if lower >= upper:
+        return 0.45, 0.55
+    return lower, upper
 
 
 # ================================================================
@@ -174,12 +184,20 @@ def train_baselines(df: pd.DataFrame, feature_cols: list) -> list:
     lr.fit(X_train, y_train)
     lr_prob_val = lr.predict_proba(X_val)[:, 1]
     lr_threshold = _find_optimal_threshold_baseline(y_val, lr_prob_val)
+    lr_signal_lower, lr_signal_upper = _signal_thresholds_from_validation(lr_prob_val)
     logger.info(f"  Optimal threshold (val balanced accuracy): {lr_threshold:.3f}")
+    logger.info(f"  Signal thresholds: cash<={lr_signal_lower:.3f}, buy>={lr_signal_upper:.3f}")
     lr_prob = lr.predict_proba(X_test)[:, 1]
     lr_pred = (lr_prob >= lr_threshold).astype(int)
     metrics_lr = _evaluate_baseline("logistic_regression", y_test, lr_pred, lr_prob)
     metrics_lr["trained_at"] = datetime.now().isoformat()
     metrics_lr["threshold"] = lr_threshold
+    metrics_lr["signal_lower_threshold"] = lr_signal_lower
+    metrics_lr["signal_upper_threshold"] = lr_signal_upper
+    metrics_lr["train_end_date"] = df.iloc[train_end - 1]["date"] if "date" in df.columns else None
+    metrics_lr["val_end_date"] = df.iloc[val_end - 1]["date"] if "date" in df.columns else None
+    metrics_lr["lookback_days"] = LOOKBACK_DAYS
+    metrics_lr["target_horizon_days"] = TARGET_HORIZON_DAYS
     all_metrics.append(metrics_lr)
 
     # Lưu model
@@ -198,12 +216,20 @@ def train_baselines(df: pd.DataFrame, feature_cols: list) -> list:
     rf.fit(X_train, y_train)
     rf_prob_val = rf.predict_proba(X_val)[:, 1]
     rf_threshold = _find_optimal_threshold_baseline(y_val, rf_prob_val)
+    rf_signal_lower, rf_signal_upper = _signal_thresholds_from_validation(rf_prob_val)
     logger.info(f"  Optimal threshold (val balanced accuracy): {rf_threshold:.3f}")
+    logger.info(f"  Signal thresholds: cash<={rf_signal_lower:.3f}, buy>={rf_signal_upper:.3f}")
     rf_prob = rf.predict_proba(X_test)[:, 1]
     rf_pred = (rf_prob >= rf_threshold).astype(int)
     metrics_rf = _evaluate_baseline("random_forest", y_test, rf_pred, rf_prob)
     metrics_rf["trained_at"] = datetime.now().isoformat()
     metrics_rf["threshold"] = rf_threshold
+    metrics_rf["signal_lower_threshold"] = rf_signal_lower
+    metrics_rf["signal_upper_threshold"] = rf_signal_upper
+    metrics_rf["train_end_date"] = df.iloc[train_end - 1]["date"] if "date" in df.columns else None
+    metrics_rf["val_end_date"] = df.iloc[val_end - 1]["date"] if "date" in df.columns else None
+    metrics_rf["lookback_days"] = LOOKBACK_DAYS
+    metrics_rf["target_horizon_days"] = TARGET_HORIZON_DAYS
     all_metrics.append(metrics_rf)
 
     _save_sklearn_model(rf, scaler, feature_cols, "random_forest", metrics_rf)
@@ -227,6 +253,7 @@ def _save_sklearn_model(clf, scaler, feature_cols: list, name: str, metrics: dic
         "model_name": name,
         "feature_cols": feature_cols,
         "lookback_days": LOOKBACK_DAYS,
+        "target_horizon_days": TARGET_HORIZON_DAYS,
         "threshold": metrics.get("threshold", TREND_THRESHOLD),
         "saved_at": datetime.now().isoformat(),
         **{k: v for k, v in metrics.items() if not isinstance(v, (list, dict))},

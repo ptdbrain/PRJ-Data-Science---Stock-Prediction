@@ -33,7 +33,7 @@ def compare_models():
     print(f"{'Model':<25} {'Acc (%)':>9} {'Precision':>10} {'Recall':>8} {'F1':>8} {'AUC':>8} {'Best':>6}")
     print("-" * 85)
 
-    sort_col = "f1" if "f1" in metrics.columns else "accuracy"
+    sort_col = "roc_auc" if "roc_auc" in metrics.columns else "accuracy"
     for _, row in metrics.sort_values(sort_col, ascending=False).iterrows():
         tag = "⭐" if row.get("is_best", 0) else ""
         print(
@@ -128,17 +128,18 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
         )
 
     # Xác định predicted trend từ predicted_proba
-    if "predicted_proba" in df.columns:
-        df["pred_trend"] = (df["predicted_proba"] >= 0.5).astype(int)
+    if "prediction_signal" in df.columns:
+        df["pred_signal"] = df["prediction_signal"].fillna(-1).astype(int)
     elif "predicted_trend" in df.columns:
-        df["pred_trend"] = df["predicted_trend"]
+        df["pred_signal"] = df["predicted_trend"].astype(int)
     else:
         logger.error("❌ Không tìm thấy cột predicted_proba hoặc predicted_trend.")
         return {}
 
     # Tính actual trend
     df["next_close"] = df["close"].shift(-1)
-    df["actual_trend"] = (df["next_close"] > df["close"]).astype(int)
+    if "actual_trend" not in df.columns or df["actual_trend"].isna().all():
+        df["actual_trend"] = (df["next_close"] > df["close"]).astype(int)
     df = df.dropna(subset=["next_close"]).reset_index(drop=True)
 
     if len(df) < 2:
@@ -170,13 +171,13 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
         buyhold_values.append(shares_buyhold * next_close)
 
         # Strategy: mua khi predict Tăng, bán khi predict Giảm
-        if row["pred_trend"] == 1 and not in_position:
+        if row["pred_signal"] == 1 and not in_position:
             # Buy
             fee = capital_strategy * TRANSACTION_FEE
             shares_strategy = (capital_strategy - fee) / row["close"]
             capital_strategy = 0
             in_position = True
-        elif row["pred_trend"] == 0 and in_position:
+        elif row["pred_signal"] == 0 and in_position:
             # Sell
             capital_strategy = shares_strategy * row["close"]
             fee = capital_strategy * TRANSACTION_FEE
@@ -192,7 +193,7 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
         strategy_values.append(portfolio_val)
 
         # Đếm dự đoán đúng
-        if row["pred_trend"] == row["actual_trend"]:
+        if row["pred_signal"] in {0, 1} and row["pred_signal"] == row["actual_trend"]:
             correct_preds += 1
 
     # Giá trị cuối (nếu vẫn đang giữ)
@@ -205,7 +206,8 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
 
     ret_strategy = (final_strategy / initial_capital - 1) * 100
     ret_buyhold = (final_buyhold / initial_capital - 1) * 100
-    directional_acc = correct_preds / (len(df) - 1) * 100
+    actionable_count = int(df.iloc[:-1]["pred_signal"].isin([0, 1]).sum())
+    directional_acc = correct_preds / max(actionable_count, 1) * 100
 
     # Sharpe Ratio (simplified, assuming 252 trading days/year, risk-free=0)
     daily_returns = pd.Series(strategy_values).pct_change().dropna()
@@ -223,6 +225,7 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
     logger.info(f"  Vốn ban đầu    : {initial_capital:>15,.0f} VND")
     logger.info(f"  Chiến lược     : {final_strategy:>15,.0f} VND  ({ret_strategy:+.2f}%)")
     logger.info(f"  Buy-and-Hold   : {final_buyhold:>15,.0f} VND  ({ret_buyhold:+.2f}%)")
+    logger.info(f"  Actionable days: {actionable_count}/{len(df) - 1}")
     logger.info(f"  Direction Acc  : {directional_acc:.1f}%")
     logger.info(f"  Sharpe Ratio   : {sharpe:.3f}")
     logger.info(f"  Max Drawdown   : {max_drawdown:.1f}%")
@@ -235,6 +238,7 @@ def backtest(initial_capital: float = 10_000_000.0) -> dict:
         "return_strategy_pct": ret_strategy,
         "return_buyhold_pct": ret_buyhold,
         "directional_accuracy": directional_acc,
+        "actionable_days": actionable_count,
         "sharpe_ratio": sharpe,
         "max_drawdown_pct": max_drawdown,
         "strategy_values": strategy_values,

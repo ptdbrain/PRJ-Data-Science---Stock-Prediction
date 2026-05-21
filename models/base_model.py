@@ -33,6 +33,7 @@ from config.settings import (
     LEARNING_RATE,
     LOOKBACK_DAYS,
     MODEL_DIR,
+    TARGET_HORIZON_DAYS,
     TRAIN_RATIO,
     TREND_THRESHOLD,
     VAL_RATIO,
@@ -279,6 +280,7 @@ class BasePredictor(ABC):
             "train_end_date": split_data["train_end_date"],
             "val_end_date": split_data["val_end_date"],
             "lookback_days": self.lookback_days,
+            "target_horizon_days": TARGET_HORIZON_DAYS,
             "feature_cols": list(self.feature_cols),
         })
 

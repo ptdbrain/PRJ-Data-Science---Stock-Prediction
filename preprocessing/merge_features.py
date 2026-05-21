@@ -6,10 +6,12 @@ from utils.logger import logger
 
 from config.settings import (
     ALL_FEATURES,
+    MIN_TARGET_RETURN,
     TABLE_CLEAN_NEWS,
     TABLE_CLEAN_PRICES,
     TABLE_FEATURES_FINANCE,
     TABLE_MERGED_FEATURES,
+    TARGET_HORIZON_DAYS,
 )
 from database.connection import read_table, write_table
 
@@ -112,18 +114,18 @@ def merge_features():
     merged = _merge_finance_features(prices)
     merged = _merge_news_features(merged)
 
-    # ================================================================
-    # Target: nhãn phân loại nhị phân (Classification)
-    # 1 = giá ngày mai TĂNG so với hôm nay
-    # 0 = giá ngày mai GIẢM hoặc ĐI NGANG
-    # Lưu ý: shift(-1) → dùng giá ngày khác (không có look-ahead bias
-    # vì cột này chỉ xuất hiện lúc train, không dùng khi inference)
-    # ================================================================
-    # Lưu giá thực tế của ngày mai để hiển thị trên dashboard.
-    # Dòng cuối chưa có giá ngày mai nên không được ép thành target=0.
-    merged["next_close"] = merged["close"].shift(-1)
+    merged["next_close_1d"] = merged["close"].shift(-1)
+    merged["target_1d"] = (merged["next_close_1d"] > merged["close"]).astype("Int64")
+
+    # Main target: forward return over a configurable horizon. This reduces
+    # next-day noise and only labels moves above the minimum return threshold
+    # as worth buying.
+    merged["next_close"] = merged["close"].shift(-TARGET_HORIZON_DAYS)
+    merged["target_horizon_days"] = TARGET_HORIZON_DAYS
+    merged["forward_return"] = merged["next_close"] / merged["close"] - 1.0
     merged = merged.dropna(subset=["next_close"]).reset_index(drop=True)
-    merged["target"] = (merged["next_close"] > merged["close"]).astype(int)
+    merged["target"] = (merged["forward_return"] > MIN_TARGET_RETURN).astype(int)
+    merged["target_1d"] = merged["target_1d"].astype(int)
 
     # Các cột optional (có thể thiếu hoặc toàn NaN với data cũ) — không ép dropna
     OPTIONAL_FEATURES = {"eps", "eps_yoy", "tfidf_sentiment", "daily_tfidf_sentiment",

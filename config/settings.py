@@ -116,6 +116,15 @@ ALL_FEATURES = PRICE_FEATURES + TECHNICAL_FEATURES + FINANCE_FEATURES + SENTIMEN
 # Ngưỡng xác suất để quyết định nhãn (>= TREND_THRESHOLD → Tăng)
 TREND_THRESHOLD = 0.5
 
+# Main learning target: predict whether forward return over this horizon is
+# large enough to be worth trading, instead of noisy next-day direction.
+TARGET_HORIZON_DAYS = 5
+MIN_TARGET_RETURN = 0.01
+
+# Prediction signal band around the trained threshold.
+#  1 = buy, 0 = cash/sell, -1 = no trade / keep current position.
+NO_TRADE_MARGIN = 0.05
+
 # Quarter-specific reporting lag rules for when financial data becomes available.
 FINANCE_REPORT_LAG_DAYS = {
     'Q1': 30,

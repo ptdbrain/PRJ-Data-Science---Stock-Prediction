@@ -186,6 +186,10 @@ MERGED_FEATURES_TABLE_SQL = """
         -- Target & display
         target INTEGER,
         next_close REAL,
+        target_1d INTEGER,
+        next_close_1d REAL,
+        target_horizon_days INTEGER,
+        forward_return REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(date)
     )
@@ -244,7 +248,10 @@ PREDICTIONS_TABLE_SQL = """
         model_name TEXT,
         predicted_proba REAL,          -- P(TĂNG) ∈ [0, 1]
         predicted_trend INTEGER,       -- 1=TĂNG, 0=GIẢM
+        prediction_signal INTEGER,     -- 1=BUY, 0=CASH/SELL, -1=NO_TRADE
         actual_trend INTEGER,          -- Ground truth (nếu đã biết)
+        target_horizon_days INTEGER,
+        actual_forward_return REAL,
         predicted_at DATETIME,
         updated_at DATETIME,
         UNIQUE(date, model_name)
@@ -269,6 +276,7 @@ MODEL_METRICS_TABLE_SQL = """
         train_end_date TEXT,
         val_end_date TEXT,
         lookback_days INTEGER,
+        target_horizon_days INTEGER,
         is_best INTEGER DEFAULT 0
     )
 """
